@@ -48,8 +48,11 @@ redisClient.connect().catch(err => {
 });
 
 app.use(cors({
-  // origin: 'http://localhost:5500',
-  origin: 'https://nups.github.io/stockapi/',
+  origin: [
+    'https://nups.github.io',
+    'https://nups.github.io/stockapi',
+    'http://localhost:5500' // for local development
+  ],
   credentials: true
 }));
 app.use(express.json());
