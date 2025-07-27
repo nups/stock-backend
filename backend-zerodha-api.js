@@ -5,6 +5,7 @@ const cors = require('cors');
 const qs = require('qs'); // npm package to stringify form data
 const crypto = require('crypto');
 const redis = require('redis');
+const OpenAI = require('openai');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -12,6 +13,11 @@ const PORT = process.env.PORT || 3001;
 const apiKey = process.env.KITE_API_KEY;
 const apiSecret = process.env.KITE_API_SECRET;
 const redirectUri = process.env.KITE_REDIRECT_URL;  // e.g. https://your-backend-url/api/zerodha/auth/callback
+
+// OpenAI client setup
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // Redis client setup
 const redisConfig = {
@@ -46,6 +52,80 @@ redisClient.connect().catch(err => {
   console.error('Failed to connect to Redis:', err);
   process.exit(1);
 });
+
+// AI Analysis Function
+async function getAIRecommendations(holdings) {
+  try {
+    const holdingsData = holdings.map(holding => ({
+      symbol: holding.tradingsymbol,
+      quantity: holding.quantity,
+      avg_price: holding.average_price,
+      current_price: holding.last_price,
+      pnl: ((holding.last_price - holding.average_price) * holding.quantity).toFixed(2)
+    }));
+
+    const prompt = `As a financial advisor, analyze these Indian stock holdings and provide buy/hold recommendations. For each stock, give EXACTLY 2 lines:
+Line 1: "BUY" or "HOLD" recommendation with brief reason
+Line 2: Key insight or risk factor
+
+Holdings data:
+${JSON.stringify(holdingsData, null, 2)}
+
+Format your response as JSON array with this structure:
+[
+  {
+    "symbol": "STOCK_SYMBOL",
+    "recommendation": "BUY" or "HOLD",
+    "reason": "Brief reason for recommendation",
+    "insight": "Key insight or risk factor"
+  }
+]
+
+Keep each reason and insight to maximum 100 characters.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You are a professional financial advisor specializing in Indian stock markets. Provide concise, actionable investment advice."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      max_tokens: 2000,
+      temperature: 0.7
+    });
+
+    const aiResponse = completion.choices[0].message.content;
+    
+    // Try to parse JSON response
+    try {
+      return JSON.parse(aiResponse);
+    } catch (parseError) {
+      console.error('Failed to parse AI response as JSON:', parseError);
+      // Fallback: return a simple structure
+      return holdings.map(holding => ({
+        symbol: holding.tradingsymbol,
+        recommendation: "HOLD",
+        reason: "AI analysis temporarily unavailable",
+        insight: "Please review manually or try again later"
+      }));
+    }
+
+  } catch (error) {
+    console.error('OpenAI API error:', error);
+    // Return fallback recommendations
+    return holdings.map(holding => ({
+      symbol: holding.tradingsymbol,
+      recommendation: "HOLD",
+      reason: "AI analysis unavailable",
+      insight: "Manual review recommended"
+    }));
+  }
+}
 
 app.use(cors({
   origin: [
@@ -196,6 +276,84 @@ app.get('/api/zerodha/holdings', async (req, res) => {
       res.status(409).json({ error: 'API rate limit or conflict. Please try again later.' });
     } else {
       res.status(500).json({ error: 'Failed to fetch holdings' });
+    }
+  }
+});
+
+// Step 3: Fetch holdings with AI recommendations
+app.get('/api/zerodha/holdings-ai', async (req, res) => {
+  const sessionToken = req.query.session;
+  
+  if (!sessionToken) {
+    return res.status(400).json({ error: 'Session token is required' });
+  }
+  
+  try {
+    // Get session data from Redis
+    const sessionData = await redisClient.get(`session:${sessionToken}`);
+    console.log('Session data:', sessionData ? 'Found' : 'Not found');
+    
+    if (!sessionData) {
+      return res.status(401).json({ error: 'Session expired or invalid. Please re-authenticate.' });
+    }
+    
+    const { access_token: accessToken, user_id: userId } = JSON.parse(sessionData);
+    
+    // Fetch holdings from Zerodha
+    const response = await axios.get('https://api.kite.trade/portfolio/holdings', {
+      headers: {
+        'X-Kite-Version': '3',
+        'Authorization': `token ${apiKey}:${accessToken}`
+      }
+    });
+    
+    const holdings = response.data.data;
+    console.log(`Holdings fetched for user: ${userId}, Count: ${holdings.length}`);
+    
+    // Get AI recommendations if holdings exist
+    let aiRecommendations = [];
+    if (holdings && holdings.length > 0) {
+      console.log('Getting AI recommendations...');
+      aiRecommendations = await getAIRecommendations(holdings);
+    }
+    
+    // Combine holdings with AI recommendations
+    const enhancedHoldings = holdings.map(holding => {
+      const aiRec = aiRecommendations.find(rec => rec.symbol === holding.tradingsymbol);
+      return {
+        ...holding,
+        ai_recommendation: aiRec || {
+          symbol: holding.tradingsymbol,
+          recommendation: "HOLD",
+          reason: "No AI analysis available",
+          insight: "Manual review recommended"
+        }
+      };
+    });
+    
+    res.json({
+      holdings: enhancedHoldings,
+      ai_analysis_status: aiRecommendations.length > 0 ? 'success' : 'partial',
+      total_holdings: holdings.length,
+      analyzed_count: aiRecommendations.length
+    });
+    
+    console.log('AI-enhanced holdings sent successfully for user:', userId);
+    
+  } catch (error) {
+    console.error('Error fetching AI-enhanced holdings:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message
+    });
+    
+    if (error.response?.status === 403) {
+      res.status(403).json({ error: 'Invalid or expired access token. Please re-authenticate.' });
+    } else if (error.response?.status === 409) {
+      res.status(409).json({ error: 'API rate limit or conflict. Please try again later.' });
+    } else {
+      res.status(500).json({ error: 'Failed to fetch AI-enhanced holdings' });
     }
   }
 });
