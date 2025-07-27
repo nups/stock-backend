@@ -1,0 +1,4 @@
+{
+    "appService.defaultWebAppToDeploy": "/subscriptions/f279481a-d813-42f8-9cb4-78faf4153fa5/resourceGroups/appsvc_linux_centralindia_basic/providers/Microsoft.Web/sites/stockApi",
+    "appService.deploySubpath": "."
+}
