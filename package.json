@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node backend-zerodha-api.js",
+    "test": "echo \"No tests specified\""
   },
   "keywords": [],
   "author": "",
@@ -12,7 +13,6 @@
   "dependencies": {
     "axios": "^1.11.0",
     "cors": "^2.8.5",
-    "crypto": "^1.0.1",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "express-session": "^1.18.2",
