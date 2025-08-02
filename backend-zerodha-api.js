@@ -69,15 +69,35 @@ async function getAIRecommendations(holdings) {
       };
     });
 
-    const prompt = `You are an aggressive Indian stock market analyst. Analyze these holdings and provide actionable BUY/HOLD recommendations. 
+    const prompt = `You are an aggressive Indian stock market analyst with a keen eye on both fundamental strength and technical momentum. Analyze these holdings and provide actionable BUY/HOLD/SELL recommendations.
 
-BE DECISIVE: If a stock shows good fundamentals, growth potential, or positive momentum - recommend BUY. Only recommend HOLD for truly neutral cases.
+BE DECISIVE: Recommend BUY if the stock demonstrates strong underlying business health, growth potential, and positive technical signals. Recommend HOLD for neutral cases where potential exists but immediate triggers are absent, or for defensive plays. Recommend SELL for clear underperformers, those with deteriorating fundamentals, or negative technical breakdowns.
 
-IMPORTANT RULES:
-1. If P&L is positive and > 5% - lean towards BUY (momentum is good)
-2. If it's a quality large-cap stock (like RELIANCE, TCS, INFY, HDFC) - likely BUY
-3. If current price is much lower than average (good value) - consider BUY
-4. Be more aggressive with recommendations - aim for 40-60% BUY recommendations
+IMPORTANT RULES FOR RECOMMENDATIONS:
+
+**Fundamental Considerations:**
+1.  **Profit & Loss (P&L):**
+    * If P&L is positive and > 5% - **Strong BUY signal** (indicates current profitability and momentum).
+    * If P&L is positive but < 5% - **Lean HOLD** (monitor for stronger signals, consider if other fundamentals are strong).
+    * If P&L is negative and < -5% - **Strong SELL signal** (significant underperformance, consider cutting losses).
+    * If P&L is negative but > -5% - **Lean HOLD/evaluate SELL** (requires deeper fundamental and technical check).
+2.  **Valuation & Quality:**
+    * If it's a quality large-cap stock (e.g., RELIANCE, TCS, INFY, HDFC) with stable or improving fundamentals (e.g., consistent revenue growth, healthy margins, low debt) - **Strong BUY/HOLD**. Less likely a SELL unless severe, prolonged underperformance or major structural shifts.
+    * If current price is significantly lower than average acquisition price (implies value opportunity) AND company fundamentals are sound - **Consider BUY** (potential for mean reversion/value unlock).
+    * **Management Quality & Governance:** Assess implicitly (e.g., through consistency of performance, lack of red flags). Strong management and governance are always a **BUY enabler**.
+    * **Competitive Landscape/Moats:** Consider if the company has a strong market position, brand, or other competitive advantages. Strong moats are a **BUY enabler**.
+
+**Technical Considerations:**
+1.  **Momentum & Trend:**
+    * If day_change_percentage is consistently positive, especially with rising last_price vs close_price - **Strong BUY** (strong intraday and short-term momentum).
+    * If day_change_percentage is consistently negative or last_price is significantly below close_price - **Strong SELL** (deteriorating short-term momentum).
+    * Consider the implied trend from average_price vs last_price. If last_price is well above average_price - **Positive Trend/BUY**. If last_price is significantly below average_price - **Negative Trend/SELL**.
+2.  **Relative Strength:** (Implicitly inferred from day_change_percentage and P&L vs. general market behavior) - Stocks showing better day_change_percentage or P&L than others in a challenging market indicate relative strength, which is a **BUY signal**.
+3.  **Volatility/Stability:** Stocks with low day_change_percentage volatility and positive P&L could be stable **HOLDs**. High negative volatility could be a **SELL**.
+
+**Aggressiveness & Bias:**
+* Be more aggressive with recommendations - aim for 40-60% BUY recommendations, and include SELL recommendations where justified by deteriorating fundamental or technical signals.
+* Prioritize cutting losses on clear underperformers.
 
 Holdings to analyze:
 ${JSON.stringify(holdingsData, null, 2)}
@@ -90,10 +110,8 @@ Respond ONLY with valid JSON array (no markdown, no extra text):
     "reason": "Strong fundamentals, positive momentum",
     "insight": "Benefiting from sector tailwinds"
   }
-]
-
-Make recommendations diverse - don't make everything HOLD. Be decisive and aggressive.`;
-
+]`;
+    console.log('Prompt for Gemini AI:', prompt);
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
     
