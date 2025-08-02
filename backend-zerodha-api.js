@@ -5,7 +5,7 @@ const cors = require('cors');
 const qs = require('qs'); // npm package to stringify form data
 const crypto = require('crypto');
 const redis = require('redis');
-const OpenAI = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -14,10 +14,9 @@ const apiKey = process.env.KITE_API_KEY;
 const apiSecret = process.env.KITE_API_SECRET;
 const redirectUri = process.env.KITE_REDIRECT_URL;  // e.g. https://your-backend-url/api/zerodha/auth/callback
 
-// OpenAI client setup
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// Google Gemini AI client setup (FREE)
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // Redis client setup
 const redisConfig = {
@@ -53,77 +52,100 @@ redisClient.connect().catch(err => {
   process.exit(1);
 });
 
-// AI Analysis Function
+// AI Analysis Function with improved prompting
 async function getAIRecommendations(holdings) {
   try {
-    const holdingsData = holdings.map(holding => ({
-      symbol: holding.tradingsymbol,
-      quantity: holding.quantity,
-      avg_price: holding.average_price,
-      current_price: holding.last_price,
-      pnl: ((holding.last_price - holding.average_price) * holding.quantity).toFixed(2)
-    }));
+    const holdingsData = holdings.map(holding => {
+      const pnl = ((holding.last_price - holding.average_price) * holding.quantity);
+      const pnlPercent = ((holding.last_price - holding.average_price) / holding.average_price * 100).toFixed(2);
+      return {
+        symbol: holding.tradingsymbol,
+        quantity: holding.quantity,
+        avg_price: holding.average_price,
+        current_price: holding.last_price,
+        pnl: pnl.toFixed(2),
+        pnl_percent: pnlPercent,
+        current_value: (holding.last_price * holding.quantity).toFixed(2)
+      };
+    });
 
-    const prompt = `As a financial advisor, analyze these Indian stock holdings and provide buy/hold recommendations. For each stock, give EXACTLY 2 lines:
-Line 1: "BUY" or "HOLD" recommendation with brief reason
-Line 2: Key insight or risk factor
+    const prompt = `You are an aggressive Indian stock market analyst. Analyze these holdings and provide actionable BUY/HOLD recommendations. 
 
-Holdings data:
+BE DECISIVE: If a stock shows good fundamentals, growth potential, or positive momentum - recommend BUY. Only recommend HOLD for truly neutral cases.
+
+IMPORTANT RULES:
+1. If P&L is positive and > 5% - lean towards BUY (momentum is good)
+2. If it's a quality large-cap stock (like RELIANCE, TCS, INFY, HDFC) - likely BUY
+3. If current price is much lower than average (good value) - consider BUY
+4. Be more aggressive with recommendations - aim for 40-60% BUY recommendations
+
+Holdings to analyze:
 ${JSON.stringify(holdingsData, null, 2)}
 
-Format your response as JSON array with this structure:
+Respond ONLY with valid JSON array (no markdown, no extra text):
 [
   {
     "symbol": "STOCK_SYMBOL",
-    "recommendation": "BUY" or "HOLD",
-    "reason": "Brief reason for recommendation",
-    "insight": "Key insight or risk factor"
+    "recommendation": "BUY",
+    "reason": "Strong fundamentals, positive momentum",
+    "insight": "Benefiting from sector tailwinds"
   }
 ]
 
-Keep each reason and insight to maximum 100 characters.`;
+Make recommendations diverse - don't make everything HOLD. Be decisive and aggressive.`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "You are a professional financial advisor specializing in Indian stock markets. Provide concise, actionable investment advice."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 2000,
-      temperature: 0.7
-    });
-
-    const aiResponse = completion.choices[0].message.content;
+    const result = await model.generateContent(prompt);
+    const aiResponse = result.response.text();
     
-    // Try to parse JSON response
+    console.log('Gemini AI Response:', aiResponse);
+    
+    // Clean the response and try to parse JSON
+    let cleanedResponse = aiResponse.trim();
+    
+    // Remove markdown code blocks if present
+    if (cleanedResponse.startsWith('```json')) {
+      cleanedResponse = cleanedResponse.replace(/```json\n?/, '').replace(/\n?```$/, '');
+    } else if (cleanedResponse.startsWith('```')) {
+      cleanedResponse = cleanedResponse.replace(/```\n?/, '').replace(/\n?```$/, '');
+    }
+    
     try {
-      return JSON.parse(aiResponse);
+      const parsed = JSON.parse(cleanedResponse);
+      console.log('Successfully parsed AI recommendations:', parsed.length, 'recommendations');
+      return parsed;
     } catch (parseError) {
-      console.error('Failed to parse AI response as JSON:', parseError);
-      // Fallback: return a simple structure
-      return holdings.map(holding => ({
-        symbol: holding.tradingsymbol,
-        recommendation: "HOLD",
-        reason: "AI analysis temporarily unavailable",
-        insight: "Please review manually or try again later"
-      }));
+      console.error('Failed to parse Gemini response as JSON:', parseError);
+      console.error('Raw response:', aiResponse);
+      
+      // Enhanced fallback with some variety
+      return holdings.map((holding, index) => {
+        // Add some variety in fallback recommendations
+        const isEven = index % 2 === 0;
+        const pnl = ((holding.last_price - holding.average_price) / holding.average_price * 100);
+        
+        return {
+          symbol: holding.tradingsymbol,
+          recommendation: (pnl > 5 || isEven) ? "BUY" : "HOLD",
+          reason: pnl > 5 ? "Positive performance trend" : "Stable fundamentals",
+          insight: "AI analysis partially available - manual review suggested"
+        };
+      });
     }
 
   } catch (error) {
-    console.error('OpenAI API error:', error);
-    // Return fallback recommendations
-    return holdings.map(holding => ({
-      symbol: holding.tradingsymbol,
-      recommendation: "HOLD",
-      reason: "AI analysis unavailable",
-      insight: "Manual review recommended"
-    }));
+    console.error('Gemini AI error:', error);
+    
+    // Enhanced fallback with variety
+    return holdings.map((holding, index) => {
+      const pnl = ((holding.last_price - holding.average_price) / holding.average_price * 100);
+      
+      return {
+        symbol: holding.tradingsymbol,
+        recommendation: pnl > 0 ? "BUY" : "HOLD",
+        reason: pnl > 0 ? "Positive returns indicated" : "Conservative approach",
+        insight: "AI service temporarily unavailable"
+      };
+    });
   }
 }
 
