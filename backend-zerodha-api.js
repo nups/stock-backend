@@ -52,8 +52,8 @@ redisClient.connect().catch(err => {
   process.exit(1);
 });
 
-// AI Analysis Function with improved prompting
-async function getAIRecommendations(holdings) {
+// Hybrid AI Analysis Function - Quick and Detailed modes
+async function getAIRecommendations(holdings, analysisMode = 'quick') {
   try {
     const holdingsData = holdings.map(holding => {
       const pnl = ((holding.last_price - holding.average_price) * holding.quantity);
@@ -69,48 +69,106 @@ async function getAIRecommendations(holdings) {
       };
     });
 
-    const prompt = `You are an aggressive Indian stock market analyst with a keen eye on both fundamental strength and technical momentum. Analyze these holdings and provide actionable BUY/HOLD/SELL recommendations.
+    let prompt;
+    
+    if (analysisMode === 'detailed') {
+      // Comprehensive equity research prompt
+      prompt = `You are an expert equity research analyst and technical market strategist at a leading quant-driven investment firm. Provide comprehensive analysis for each stock.
 
-BE DECISIVE: Recommend BUY if the stock demonstrates strong underlying business health, growth potential, and positive technical signals. Recommend HOLD for neutral cases where potential exists but immediate triggers are absent, or for defensive plays. Recommend SELL for clear underperformers, those with deteriorating fundamentals, or negative technical breakdowns.
+**Analysis Framework:**
+1. **Fundamental Analysis (1-5 score)**:
+   - Business Model & Unit Economics
+   - Growth Drivers & Catalysts  
+   - Industry Positioning & Competitive Edge
+   - Valuation Assessment
+   - Financial Health & Quality
+   - Risk Assessment
 
-IMPORTANT RULES FOR RECOMMENDATIONS:
+2. **Technical Analysis (1-5 score)**:
+   - Price Momentum & Trend Analysis
+   - Volume-Price Relationship
+   - Support & Resistance Levels
+   - Relative Strength vs Market
+   - Entry/Exit Signals
 
-**Fundamental Considerations:**
-1.  **Profit & Loss (P&L):**
-    * If P&L is positive and > 5% - **Strong BUY signal** (indicates current profitability and momentum).
-    * If P&L is positive but < 5% - **Lean HOLD** (monitor for stronger signals, consider if other fundamentals are strong).
-    * If P&L is negative and < -5% - **Strong SELL signal** (significant underperformance, consider cutting losses).
-    * If P&L is negative but > -5% - **Lean HOLD/evaluate SELL** (requires deeper fundamental and technical check).
-2.  **Valuation & Quality:**
-    * If it's a quality large-cap stock (e.g., RELIANCE, TCS, INFY, HDFC) with stable or improving fundamentals (e.g., consistent revenue growth, healthy margins, low debt) - **Strong BUY/HOLD**. Less likely a SELL unless severe, prolonged underperformance or major structural shifts.
-    * If current price is significantly lower than average acquisition price (implies value opportunity) AND company fundamentals are sound - **Consider BUY** (potential for mean reversion/value unlock).
-    * **Management Quality & Governance:** Assess implicitly (e.g., through consistency of performance, lack of red flags). Strong management and governance are always a **BUY enabler**.
-    * **Competitive Landscape/Moats:** Consider if the company has a strong market position, brand, or other competitive advantages. Strong moats are a **BUY enabler**.
+3. **Investment Thesis**:
+   - Bull/Base/Bear Case Scenarios
+   - Key Catalysts & Risk Factors
+   - Target Price & Time Horizon
 
-**Technical Considerations:**
-1.  **Momentum & Trend:**
-    * If day_change_percentage is consistently positive, especially with rising last_price vs close_price - **Strong BUY** (strong intraday and short-term momentum).
-    * If day_change_percentage is consistently negative or last_price is significantly below close_price - **Strong SELL** (deteriorating short-term momentum).
-    * Consider the implied trend from average_price vs last_price. If last_price is well above average_price - **Positive Trend/BUY**. If last_price is significantly below average_price - **Negative Trend/SELL**.
-2.  **Relative Strength:** (Implicitly inferred from day_change_percentage and P&L vs. general market behavior) - Stocks showing better day_change_percentage or P&L than others in a challenging market indicate relative strength, which is a **BUY signal**.
-3.  **Volatility/Stability:** Stocks with low day_change_percentage volatility and positive P&L could be stable **HOLDs**. High negative volatility could be a **SELL**.
+**Scoring Scale:**
+- 5: Very Strong/Positive (Strong BUY)
+- 4: Strong/Positive (BUY) 
+- 3: Neutral (HOLD)
+- 2: Weak/Negative (SELL consideration)
+- 1: Very Weak/Negative (Strong SELL)
 
-**Aggressiveness & Bias:**
-* Be more aggressive with recommendations - aim for 40-60% BUY recommendations, and include SELL recommendations where justified by deteriorating fundamental or technical signals.
-* Prioritize cutting losses on clear underperformers.
+**Analysis Rules:**
+- Be decisive with recommendations (40-60% BUY, include SELL where justified)
+- Consider P&L performance, quality metrics, and momentum
+- Factor in Indian market context and sector dynamics
 
-Holdings to analyze:
+Holdings Data:
 ${JSON.stringify(holdingsData, null, 2)}
 
-Respond ONLY with valid JSON array (no markdown, no extra text):
+Respond with detailed JSON:
 [
   {
     "symbol": "STOCK_SYMBOL",
     "recommendation": "BUY",
-    "reason": "Strong fundamentals, positive momentum",
-    "insight": "Benefiting from sector tailwinds"
+    "fundamental_score": 4,
+    "technical_score": 4,
+    "overall_score": 4.0,
+    "business_model": "Brief business model assessment",
+    "growth_drivers": "Key growth catalysts",
+    "competitive_edge": "Competitive advantages",
+    "valuation_view": "Valuation assessment",
+    "technical_view": "Technical momentum analysis",
+    "bull_case": "Bull case scenario",
+    "bear_case": "Bear case risks",
+    "target_price": "₹XXX (upside/downside %)",
+    "key_risks": "Primary risk factors",
+    "investment_thesis": "Overall investment rationale"
   }
 ]`;
+    } else {
+      // Quick portfolio analysis prompt
+      prompt = `You are an expert equity research analyst. Provide quick but decisive portfolio analysis for these Indian stock holdings.
+
+**Quick Analysis Framework:**
+1. **Fundamental Score (1-5)**: Business health, growth prospects, valuation
+2. **Technical Score (1-5)**: Price momentum, trend strength, patterns
+3. **Risk Assessment**: Key risks and catalysts
+4. **Action**: BUY/HOLD/SELL with rationale
+
+**Key Factors:**
+- P&L Performance: +5% = Strong signal, -5% = Weak signal
+- Quality: Large-caps (RELIANCE, TCS, INFY, HDFC) get premium
+- Value: Price below average = opportunity
+- Momentum: Current price trends and relative strength
+
+**Be Aggressive**: 40-60% BUY recommendations, include SELL where justified
+
+Holdings Data:
+${JSON.stringify(holdingsData, null, 2)}
+
+Respond ONLY with JSON:
+[
+  {
+    "symbol": "STOCK_SYMBOL",
+    "recommendation": "BUY",
+    "fundamental_score": 4,
+    "technical_score": 4,
+    "overall_score": 4.0,
+    "reason": "Strong fundamentals with positive momentum",
+    "insight": "Quality business with growth catalysts",
+    "risk_note": "Monitor sector headwinds",
+    "action_priority": "High/Medium/Low"
+  }
+]`;
+    }
+
+    console.log(`Running ${analysisMode} analysis for ${holdingsData.length} stocks...`);
     console.log('Prompt for Gemini AI:', prompt);
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
@@ -323,6 +381,7 @@ app.get('/api/zerodha/holdings', async (req, res) => {
 // Step 3: Fetch holdings with AI recommendations
 app.get('/api/zerodha/holdings-ai', async (req, res) => {
   const sessionToken = req.query.session;
+  const analysisMode = req.query.mode || 'quick'; // Default to quick, allow ?mode=detailed
   
   if (!sessionToken) {
     return res.status(400).json({ error: 'Session token is required' });
@@ -348,13 +407,13 @@ app.get('/api/zerodha/holdings-ai', async (req, res) => {
     });
     
     const holdings = response.data.data;
-    console.log(`Holdings fetched for user: ${userId}, Count: ${holdings.length}`);
+    console.log(`Holdings fetched for user: ${userId}, Count: ${holdings.length}, Mode: ${analysisMode}`);
     
     // Get AI recommendations if holdings exist
     let aiRecommendations = [];
     if (holdings && holdings.length > 0) {
-      console.log('Getting AI recommendations...');
-      aiRecommendations = await getAIRecommendations(holdings);
+      console.log(`Getting AI recommendations (${analysisMode} analysis)...`);
+      aiRecommendations = await getAIRecommendations(holdings, analysisMode);
     }
     
     // Combine holdings with AI recommendations
@@ -365,6 +424,9 @@ app.get('/api/zerodha/holdings-ai', async (req, res) => {
         ai_recommendation: aiRec || {
           symbol: holding.tradingsymbol,
           recommendation: "HOLD",
+          fundamental_score: 3,
+          technical_score: 3,
+          overall_score: 3.0,
           reason: "No AI analysis available",
           insight: "Manual review recommended"
         }
@@ -373,12 +435,14 @@ app.get('/api/zerodha/holdings-ai', async (req, res) => {
     
     res.json({
       holdings: enhancedHoldings,
+      analysis_mode: analysisMode,
       ai_analysis_status: aiRecommendations.length > 0 ? 'success' : 'partial',
       total_holdings: holdings.length,
-      analyzed_count: aiRecommendations.length
+      analyzed_count: aiRecommendations.length,
+      analysis_timestamp: new Date().toISOString()
     });
     
-    console.log('AI-enhanced holdings sent successfully for user:', userId);
+    console.log(`AI-enhanced holdings (${analysisMode}) sent successfully for user:`, userId);
     
   } catch (error) {
     console.error('Error fetching AI-enhanced holdings:', {
