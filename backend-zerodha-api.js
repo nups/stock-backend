@@ -52,7 +52,51 @@ redisClient.connect().catch(err => {
   process.exit(1);
 });
 
-// Hybrid AI Analysis Function - Quick and Detailed modes
+// --- Azure Cognitive Search configuration ---
+// Prefer environment variables, fallback to the values you provided.
+const AZURE_SEARCH_ENDPOINT = process.env.AZURE_SEARCH_ENDPOINT;
+const AZURE_SEARCH_INDEX = process.env.AZURE_SEARCH_INDEX;
+const AZURE_SEARCH_QUERY_KEY = process.env.AZURE_SEARCH_QUERY_KEY;
+const AZURE_SEARCH_API_VERSION = '2020-06-30'; // stable API version for simple search operations
+
+/**
+ * Perform a simple search against Azure Cognitive Search index.
+ * @param {string} query - search string (use '*' or '' for match-all)
+ * @param {number} top - max number of results to return
+ */
+async function azureSearch(query, top = 10) {
+  const url = `${AZURE_SEARCH_ENDPOINT}/indexes/${encodeURIComponent(AZURE_SEARCH_INDEX)}/docs/search?api-version=${AZURE_SEARCH_API_VERSION}`;
+  const body = {
+    search: query || '*',
+    top,
+    // You can add additional options here (filter, select, highlight, etc.)
+  };
+
+  const resp = await axios.post(url, body, {
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': AZURE_SEARCH_QUERY_KEY
+    }
+  });
+
+  return resp.data;
+}
+
+/**
+ * Retrieve a document by its key from the Azure Search index.
+ * Note: The key field name depends on your index definition (usually 'id' or similar).
+ */
+async function azureGetDocumentById(id) {
+  const url = `${AZURE_SEARCH_ENDPOINT}/indexes/${encodeURIComponent(AZURE_SEARCH_INDEX)}/docs/${encodeURIComponent(id)}?api-version=${AZURE_SEARCH_API_VERSION}`;
+  const resp = await axios.get(url, {
+    headers: {
+      'api-key': AZURE_SEARCH_QUERY_KEY
+    }
+  });
+  return resp.data;
+}
+
+// Hybrid AI Analysis Function - Quick and Detailed modes with Knowledge Base Context
 async function getAIRecommendations(holdings, analysisMode = 'quick') {
   try {
     const holdingsData = holdings.map(holding => {
@@ -69,11 +113,38 @@ async function getAIRecommendations(holdings, analysisMode = 'quick') {
       };
     });
 
+    // Get relevant context from knowledge base
+    let knowledgeContext = '';
+    try {
+      const stockSymbols = holdingsData.map(h => h.symbol).join(' ');
+      const searchQuery = `investment analysis stock recommendations ${stockSymbols}`;
+      console.log(`Searching knowledge base for: "${searchQuery}"`);
+      
+      const searchResults = await azureSearch(searchQuery, 3); // Get top 3 relevant documents
+      
+      if (searchResults.value && searchResults.value.length > 0) {
+        knowledgeContext = searchResults.value.map((doc, index) => {
+          const content = Object.entries(doc)
+            .filter(([key, value]) => typeof value === 'string' && key !== '@search.score')
+            .map(([key, value]) => `${key}: ${value}`)
+            .join('\n');
+          return `Knowledge Document ${index + 1}:\n${content}`;
+        }).join('\n\n---\n\n');
+        
+        console.log(`Found ${searchResults.value.length} relevant documents in knowledge base`);
+      }
+    } catch (searchError) {
+      console.log('Knowledge base search failed, proceeding without context:', searchError.message);
+    }
+
     let prompt;
     
     if (analysisMode === 'detailed') {
-      // Comprehensive equity research prompt
-      prompt = `You are an expert equity research analyst and technical market strategist at a leading quant-driven investment firm. Provide comprehensive analysis for each stock.
+      // Comprehensive equity research prompt with knowledge base context
+      prompt = `You are an expert equity research analyst and technical market strategist at a leading quant-driven investment firm. Provide comprehensive analysis for each stock using both market knowledge and the provided knowledge base context.
+
+**Knowledge Base Context:**
+${knowledgeContext || 'No specific knowledge base context available for these stocks.'}
 
 **Analysis Framework:**
 1. **Fundamental Analysis (1-5 score)**:
@@ -107,6 +178,7 @@ async function getAIRecommendations(holdings, analysisMode = 'quick') {
 - Be decisive with recommendations (40-60% BUY, include SELL where justified)
 - Consider P&L performance, quality metrics, and momentum
 - Factor in Indian market context and sector dynamics
+- Use knowledge base insights when available
 
 Holdings Data:
 ${JSON.stringify(holdingsData, null, 2)}
@@ -128,12 +200,16 @@ Respond with detailed JSON:
     "bear_case": "Bear case risks",
     "target_price": "₹XXX (upside/downside %)",
     "key_risks": "Primary risk factors",
-    "investment_thesis": "Overall investment rationale"
+    "investment_thesis": "Overall investment rationale",
+    "knowledge_insights": "Insights from knowledge base (if any)"
   }
 ]`;
     } else {
-      // Quick portfolio analysis prompt
-      prompt = `You are an expert equity research analyst. Provide quick but decisive portfolio analysis for these Indian stock holdings.
+      // Quick portfolio analysis prompt with knowledge base context
+      prompt = `You are an expert equity research analyst. Provide quick but decisive portfolio analysis for these Indian stock holdings using both market knowledge and the provided knowledge base context.
+
+**Knowledge Base Context:**
+${knowledgeContext || 'No specific knowledge base context available for these stocks.'}
 
 **Quick Analysis Framework:**
 1. **Fundamental Score (1-5)**: Business health, growth prospects, valuation
@@ -146,6 +222,7 @@ Respond with detailed JSON:
 - Quality: Large-caps (RELIANCE, TCS, INFY, HDFC) get premium
 - Value: Price below average = opportunity
 - Momentum: Current price trends and relative strength
+- Knowledge Base: Use relevant insights from provided context
 
 **Be Aggressive**: 40-60% BUY recommendations, include SELL where justified
 
@@ -163,17 +240,17 @@ Respond ONLY with JSON:
     "reason": "Strong fundamentals with positive momentum",
     "insight": "Quality business with growth catalysts",
     "risk_note": "Monitor sector headwinds",
-    "action_priority": "High/Medium/Low"
+    "action_priority": "High/Medium/Low",
+    "knowledge_insights": "Relevant insights from knowledge base"
   }
 ]`;
     }
 
-    console.log(`Running ${analysisMode} analysis for ${holdingsData.length} stocks...`);
-    console.log('Prompt for Gemini AI:', prompt);
+    console.log(`Running ${analysisMode} analysis for ${holdingsData.length} stocks with knowledge base context...`);
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
     
-    console.log('Gemini AI Response:', aiResponse);
+    console.log('Gemini AI Response with knowledge context:', aiResponse);
     
     // Clean the response and try to parse JSON
     let cleanedResponse = aiResponse.trim();
@@ -187,7 +264,7 @@ Respond ONLY with JSON:
     
     try {
       const parsed = JSON.parse(cleanedResponse);
-      console.log('Successfully parsed AI recommendations:', parsed.length, 'recommendations');
+      console.log('Successfully parsed AI recommendations with knowledge context:', parsed.length, 'recommendations');
       return parsed;
     } catch (parseError) {
       console.error('Failed to parse Gemini response as JSON:', parseError);
@@ -203,7 +280,8 @@ Respond ONLY with JSON:
           symbol: holding.tradingsymbol,
           recommendation: (pnl > 5 || isEven) ? "BUY" : "HOLD",
           reason: pnl > 5 ? "Positive performance trend" : "Stable fundamentals",
-          insight: "AI analysis partially available - manual review suggested"
+          insight: "AI analysis partially available - manual review suggested",
+          knowledge_insights: "Knowledge base context integration failed"
         };
       });
     }
@@ -219,7 +297,8 @@ Respond ONLY with JSON:
         symbol: holding.tradingsymbol,
         recommendation: pnl > 0 ? "BUY" : "HOLD",
         reason: pnl > 0 ? "Positive returns indicated" : "Conservative approach",
-        insight: "AI service temporarily unavailable"
+        insight: "AI service temporarily unavailable",
+        knowledge_insights: "Knowledge base not accessible"
       };
     });
   }
@@ -461,6 +540,38 @@ app.get('/api/zerodha/holdings-ai', async (req, res) => {
     }
   }
 });
+
+// Public route to query the Azure Cognitive Search index
+app.get('/api/search', async (req, res) => {
+  const q = req.query.q || '*';
+  const top = parseInt(req.query.top, 10) || 10;
+
+  try {
+    const results = await azureSearch(q, top);
+    res.json({ status: 'ok', query: q, results });
+  } catch (error) {
+    console.error('Azure Search query error:', error.message || error);
+    res.status(500).json({ status: 'error', message: 'Failed to query Azure Cognitive Search', details: error.message });
+  }
+});
+
+// Public route to get a single document by id from the index
+app.get('/api/search/doc', async (req, res) => {
+  const id = req.query.id;
+  if (!id) return res.status(400).json({ error: 'Document id is required as ?id=' });
+
+  try {
+    const doc = await azureGetDocumentById(id);
+    res.json({ status: 'ok', document: doc });
+  } catch (error) {
+    console.error('Azure Search get document error:', error.message || error);
+    // If index or document is not found, surface a 404 when appropriate
+    const statusCode = error.response?.status || 500;
+    res.status(statusCode).json({ status: 'error', message: 'Failed to retrieve document from Azure Cognitive Search', details: error.response?.data || error.message });
+  }
+});
+
+
 
 app.listen(PORT, () => {
   console.log(`Zerodha backend API listening on port ${PORT}`);
