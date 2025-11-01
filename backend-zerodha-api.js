@@ -306,13 +306,7 @@ Respond ONLY with JSON:
 
 app.use(cors({
   origin: [
-    'https://stock-watchlist-fixed-h4qktbl8b-noopurs-projects-93f3228e.vercel.app',
-    'https://stock-watchlist-fixed-di5o5lvyo-noopurs-projects-93f3228e.vercel.app', // Keep previous ones for safety
-    'https://stock-watchlist-fixed-5a00smuhi-noopurs-projects-93f3228e.vercel.app',
-    'https://stock-watchlist-fixed-3pdezlz7u-noopurs-projects-93f3228e.vercel.app',
-    'https://stock-watchlist-fixed-6s0rfrikk-noopurs-projects-93f3228e.vercel.app',
-    'https://stock-watchlist-fixed-naqekif2a-noopurs-projects-93f3228e.vercel.app',
-    'https://stock-watchlist-fixed-fgjlcw96b-noopurs-projects-93f3228e.vercel.app',
+    'https://stock-watchlist-fixed-3ky16cvxa-noopurs-projects-93f3228e.vercel.app',
     'https://nups.github.io',
     'https://nups.github.io/stockapi',
     'http://localhost:5500', // for local development
@@ -401,7 +395,7 @@ app.get('/api/zerodha/auth/callback', async (req, res) => {
     console.log(`Access token stored for user: ${userId} with session: ${sessionToken}`);
     
     // Redirect back to frontend with session token
-    res.redirect(`https://stock-watchlist-fixed-h4qktbl8b-noopurs-projects-93f3228e.vercel.app/?session=${sessionToken}`);
+    res.redirect(`https://stock-watchlist-fixed-3ky16cvxa-noopurs-projects-93f3228e.vercel.app/?session=${sessionToken}`);
   } catch (error) {
     console.error('Error exchanging request_token:', {
       status: error.response?.status,
@@ -576,6 +570,71 @@ app.get('/api/search/doc', async (req, res) => {
     // If index or document is not found, surface a 404 when appropriate
     const statusCode = error.response?.status || 500;
     res.status(statusCode).json({ status: 'error', message: 'Failed to retrieve document from Azure Cognitive Search', details: error.response?.data || error.message });
+  }
+});
+
+// API endpoint for technical recommendations (tabular format)
+app.get('/api/recommendations/technical', (req, res) => {
+  try {
+    res.json({
+      status: 'success',
+      data: technicalRecommendations,
+      count: technicalRecommendations.length,
+      type: 'technical',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching technical recommendations:', error);
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to fetch technical recommendations',
+      error: error.message 
+    });
+  }
+});
+
+// API endpoint for fundamental recommendations (tabular format)
+app.get('/api/recommendations/fundamental', (req, res) => {
+  try {
+    res.json({
+      status: 'success',
+      data: fundamentalRecommendations,
+      count: fundamentalRecommendations.length,
+      type: 'fundamental',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching fundamental recommendations:', error);
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to fetch fundamental recommendations',
+      error: error.message 
+    });
+  }
+});
+
+// Combined recommendations endpoint (both technical and fundamental)
+app.get('/api/recommendations', (req, res) => {
+  try {
+    res.json({
+      status: 'success',
+      technical: {
+        data: technicalRecommendations,
+        count: technicalRecommendations.length
+      },
+      fundamental: {
+        data: fundamentalRecommendations,
+        count: fundamentalRecommendations.length
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching combined recommendations:', error);
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to fetch recommendations',
+      error: error.message 
+    });
   }
 });
 
