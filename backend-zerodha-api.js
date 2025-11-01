@@ -306,8 +306,9 @@ Respond ONLY with JSON:
 
 app.use(cors({
   origin: [
-    'https://stock-watchlist-fixed-di5o5lvyo-noopurs-projects-93f3228e.vercel.app',
-    'https://stock-watchlist-fixed-5a00smuhi-noopurs-projects-93f3228e.vercel.app', // Keep previous ones for safety
+    'https://stock-watchlist-fixed-h4qktbl8b-noopurs-projects-93f3228e.vercel.app',
+    'https://stock-watchlist-fixed-di5o5lvyo-noopurs-projects-93f3228e.vercel.app', // Keep previous ones for safety
+    'https://stock-watchlist-fixed-5a00smuhi-noopurs-projects-93f3228e.vercel.app',
     'https://stock-watchlist-fixed-3pdezlz7u-noopurs-projects-93f3228e.vercel.app',
     'https://stock-watchlist-fixed-6s0rfrikk-noopurs-projects-93f3228e.vercel.app',
     'https://stock-watchlist-fixed-naqekif2a-noopurs-projects-93f3228e.vercel.app',
@@ -400,7 +401,7 @@ app.get('/api/zerodha/auth/callback', async (req, res) => {
     console.log(`Access token stored for user: ${userId} with session: ${sessionToken}`);
     
     // Redirect back to frontend with session token
-    res.redirect(`https://stock-watchlist-fixed-di5o5lvyo-noopurs-projects-93f3228e.vercel.app/?session=${sessionToken}`);
+    res.redirect(`https://stock-watchlist-fixed-h4qktbl8b-noopurs-projects-93f3228e.vercel.app/?session=${sessionToken}`);
   } catch (error) {
     console.error('Error exchanging request_token:', {
       status: error.response?.status,
