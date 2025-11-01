@@ -308,7 +308,8 @@ app.use(cors({
   origin: [
     'https://nups.github.io',
     'https://nups.github.io/stockapi',
-    'http://localhost:5500' // for local development
+    'http://localhost:5500', // for local development
+    'http://localhost:3000'
   ],
   credentials: true
 }));
