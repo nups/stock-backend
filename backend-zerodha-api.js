@@ -573,72 +573,40 @@ app.get('/api/search/doc', async (req, res) => {
   }
 });
 
-// API endpoint for technical recommendations (tabular format)
-app.get('/api/recommendations/technical', (req, res) => {
+// Stock price API endpoint using Yahoo Finance
+app.get('/api/stock-price/:symbol', async (req, res) => {
   try {
-    res.json({
-      status: 'success',
-      data: technicalRecommendations,
-      count: technicalRecommendations.length,
-      type: 'technical',
-      timestamp: new Date().toISOString()
-    });
+    const symbol = req.params.symbol;
+    const response = await axios.get(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`);
+    const data = response.data;
+    
+    if (data.chart && data.chart.result && data.chart.result[0]) {
+      const result = data.chart.result[0];
+      const price = result.meta.regularMarketPrice;
+      const currency = result.meta.currency || 'USD';
+      const marketState = result.meta.marketState || 'UNKNOWN';
+      
+      res.json({ 
+        symbol, 
+        price, 
+        currency,
+        marketState,
+        success: true,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.json({ symbol, price: null, success: false, message: 'No data found for symbol' });
+    }
   } catch (error) {
-    console.error('Error fetching technical recommendations:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: 'Failed to fetch technical recommendations',
+    console.error(`Error fetching price for ${req.params.symbol}:`, error.message);
+    res.json({ 
+      symbol: req.params.symbol, 
+      price: null, 
+      success: false, 
       error: error.message 
     });
   }
 });
-
-// API endpoint for fundamental recommendations (tabular format)
-app.get('/api/recommendations/fundamental', (req, res) => {
-  try {
-    res.json({
-      status: 'success',
-      data: fundamentalRecommendations,
-      count: fundamentalRecommendations.length,
-      type: 'fundamental',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('Error fetching fundamental recommendations:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: 'Failed to fetch fundamental recommendations',
-      error: error.message 
-    });
-  }
-});
-
-// Combined recommendations endpoint (both technical and fundamental)
-app.get('/api/recommendations', (req, res) => {
-  try {
-    res.json({
-      status: 'success',
-      technical: {
-        data: technicalRecommendations,
-        count: technicalRecommendations.length
-      },
-      fundamental: {
-        data: fundamentalRecommendations,
-        count: fundamentalRecommendations.length
-      },
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('Error fetching combined recommendations:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: 'Failed to fetch recommendations',
-      error: error.message 
-    });
-  }
-});
-
-
 
 app.listen(PORT, () => {
   console.log(`Zerodha backend API listening on port ${PORT}`);
