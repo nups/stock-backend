@@ -306,7 +306,8 @@ Respond ONLY with JSON:
 
 app.use(cors({
   origin: [
-    'https://stock-watchlist-fixed-fgjlcw96b-noopurs-projects-93f3228e.vercel.app',
+    'https://stock-watchlist-fixed-naqekif2a-noopurs-projects-93f3228e.vercel.app',
+    'https://stock-watchlist-fixed-fgjlcw96b-noopurs-projects-93f3228e.vercel.app', // Keep old one for safety
     'https://nups.github.io',
     'https://nups.github.io/stockapi',
     'http://localhost:5500', // for local development
@@ -395,7 +396,7 @@ app.get('/api/zerodha/auth/callback', async (req, res) => {
     console.log(`Access token stored for user: ${userId} with session: ${sessionToken}`);
     
     // Redirect back to frontend with session token
-    res.redirect(`https://stock-watchlist-fixed-fgjlcw96b-noopurs-projects-93f3228e.vercel.app/?session=${sessionToken}`);
+    res.redirect(`https://stock-watchlist-fixed-naqekif2a-noopurs-projects-93f3228e.vercel.app/?session=${sessionToken}`);
   } catch (error) {
     console.error('Error exchanging request_token:', {
       status: error.response?.status,
