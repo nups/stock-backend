@@ -626,6 +626,115 @@ app.get('/api/stock-price/:symbol', async (req, res) => {
   }
 });
 
+// Stock details API endpoint with comprehensive information
+app.get('/api/stock-details/:symbol', async (req, res) => {
+  try {
+    let symbol = req.params.symbol;
+    const originalSymbol = req.params.symbol;
+    
+    // Handle NSE: prefix and convert to Yahoo Finance format
+    if (symbol.startsWith('NSE:')) {
+      symbol = symbol.replace('NSE:', '') + '.NS';
+    }
+    // Handle BSE: prefix
+    else if (symbol.startsWith('BSE:')) {
+      symbol = symbol.replace('BSE:', '') + '.BO';
+    }
+    
+    console.log(`Fetching detailed info for symbol: ${symbol} (original: ${originalSymbol})`);
+    
+    // Get comprehensive stock data from Yahoo Finance
+    const [chartResponse, quoteSummaryResponse] = await Promise.allSettled([
+      axios.get(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`),
+      axios.get(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=price,summaryDetail,defaultKeyStatistics,financialData`)
+    ]);
+    
+    let stockDetails = {
+      symbol: originalSymbol,
+      yahoo_symbol: symbol,
+      success: false,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Process chart data (price info)
+    if (chartResponse.status === 'fulfilled' && chartResponse.value.data.chart?.result?.[0]) {
+      const chartData = chartResponse.value.data.chart.result[0];
+      const meta = chartData.meta;
+      
+      stockDetails = {
+        ...stockDetails,
+        price: meta.regularMarketPrice,
+        previousClose: meta.previousClose,
+        open: meta.regularMarketOpen,
+        dayHigh: meta.regularMarketDayHigh,
+        dayLow: meta.regularMarketDayLow,
+        volume: meta.regularMarketVolume,
+        currency: meta.currency,
+        marketState: meta.marketState,
+        exchangeName: meta.exchangeName,
+        instrumentType: meta.instrumentType,
+        success: true
+      };
+    }
+    
+    // Process quote summary data (detailed financials)
+    if (quoteSummaryResponse.status === 'fulfilled' && quoteSummaryResponse.value.data.quoteSummary?.result?.[0]) {
+      const quoteData = quoteSummaryResponse.value.data.quoteSummary.result[0];
+      
+      // Add price details
+      if (quoteData.price) {
+        stockDetails.marketCap = quoteData.price.marketCap?.raw;
+        stockDetails.shortName = quoteData.price.shortName;
+        stockDetails.longName = quoteData.price.longName;
+      }
+      
+      // Add summary details
+      if (quoteData.summaryDetail) {
+        stockDetails.pe = quoteData.summaryDetail.trailingPE?.raw;
+        stockDetails.forwardPE = quoteData.summaryDetail.forwardPE?.raw;
+        stockDetails.dividendYield = quoteData.summaryDetail.dividendYield?.raw;
+        stockDetails.week52High = quoteData.summaryDetail.fiftyTwoWeekHigh?.raw;
+        stockDetails.week52Low = quoteData.summaryDetail.fiftyTwoWeekLow?.raw;
+        stockDetails.avgVolume = quoteData.summaryDetail.averageVolume?.raw;
+      }
+      
+      // Add key statistics
+      if (quoteData.defaultKeyStatistics) {
+        stockDetails.eps = quoteData.defaultKeyStatistics.trailingEps?.raw;
+        stockDetails.bookValue = quoteData.defaultKeyStatistics.bookValue?.raw;
+        stockDetails.priceToBook = quoteData.defaultKeyStatistics.priceToBook?.raw;
+      }
+      
+      // Add financial data
+      if (quoteData.financialData) {
+        stockDetails.revenueGrowth = quoteData.financialData.revenueGrowth?.raw;
+        stockDetails.profitMargin = quoteData.financialData.profitMargins?.raw;
+        stockDetails.returnOnEquity = quoteData.financialData.returnOnEquity?.raw;
+        stockDetails.debtToEquity = quoteData.financialData.debtToEquity?.raw;
+      }
+    }
+    
+    // Calculate percentage change
+    if (stockDetails.price && stockDetails.previousClose) {
+      const change = stockDetails.price - stockDetails.previousClose;
+      const changePercent = (change / stockDetails.previousClose) * 100;
+      stockDetails.change = parseFloat(change.toFixed(2));
+      stockDetails.changePercent = parseFloat(changePercent.toFixed(2));
+    }
+    
+    res.json(stockDetails);
+    
+  } catch (error) {
+    console.error(`Error fetching details for ${req.params.symbol}:`, error.message);
+    res.json({
+      symbol: req.params.symbol,
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Zerodha backend API listening on port ${PORT}`);
 });
