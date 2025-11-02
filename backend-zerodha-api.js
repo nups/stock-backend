@@ -581,7 +581,19 @@ app.get('/api/search/doc', async (req, res) => {
 // Stock price API endpoint using Yahoo Finance
 app.get('/api/stock-price/:symbol', async (req, res) => {
   try {
-    const symbol = req.params.symbol;
+    let symbol = req.params.symbol;
+    
+    // Handle NSE: prefix and convert to Yahoo Finance format
+    if (symbol.startsWith('NSE:')) {
+      symbol = symbol.replace('NSE:', '') + '.NS';
+    }
+    // Handle BSE: prefix
+    else if (symbol.startsWith('BSE:')) {
+      symbol = symbol.replace('BSE:', '') + '.BO';
+    }
+    
+    console.log(`Fetching price for symbol: ${symbol} (original: ${req.params.symbol})`);
+    
     const response = await axios.get(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`);
     const data = response.data;
     
@@ -592,7 +604,8 @@ app.get('/api/stock-price/:symbol', async (req, res) => {
       const marketState = result.meta.marketState || 'UNKNOWN';
       
       res.json({ 
-        symbol, 
+        symbol: req.params.symbol, // Original symbol from request
+        yahoo_symbol: symbol, // Converted symbol for Yahoo Finance
         price, 
         currency,
         marketState,
