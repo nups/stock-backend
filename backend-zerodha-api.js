@@ -917,6 +917,224 @@ app.post('/api/auth/google/token', async (req, res) => {
   }
 });
 
+// Google OAuth logout endpoint
+app.post('/api/auth/google/logout', async (req, res) => {
+  try {
+    const { session_token, access_token } = req.body;
+    
+    console.log('Google OAuth logout started:', {
+      has_session_token: !!session_token,
+      has_access_token: !!access_token,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Step 1: Remove session from Redis if session_token provided
+    if (session_token) {
+      try {
+        const sessionKey = `google_session:${session_token}`;
+        const deleted = await redisClient.del(sessionKey);
+        console.log(`Session removed from Redis: ${sessionKey}, deleted: ${deleted > 0}`);
+      } catch (redisError) {
+        console.error('Redis session cleanup failed (non-critical):', redisError.message);
+      }
+    }
+    
+    // Step 2: Revoke Google access token if provided
+    if (access_token) {
+      try {
+        console.log('Revoking Google access token...');
+        await axios.post('https://oauth2.googleapis.com/revoke', null, {
+          params: {
+            token: access_token
+          },
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 5000  // 5 second timeout
+        });
+        console.log('Google access token revoked successfully');
+      } catch (revokeError) {
+        console.error('Google token revocation failed (non-critical):', {
+          status: revokeError.response?.status,
+          data: revokeError.response?.data,
+          message: revokeError.message
+        });
+        // Continue even if revocation fails - user is still logged out locally
+      }
+    }
+    
+    // Step 3: Return successful logout response
+    const response = {
+      success: true,
+      message: 'Logout successful',
+      session_cleared: !!session_token,
+      token_revoked: !!access_token,
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log('Google OAuth logout completed successfully');
+    res.json(response);
+    
+  } catch (error) {
+    console.error('Google OAuth logout error:', {
+      message: error.message,
+      status: error.response?.status,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Even if there's an error, return success for logout (fail-safe)
+    res.json({
+      success: true,
+      message: 'Logout completed (with errors)',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Generic logout endpoint (handles both Google and Zerodha sessions)
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const { session_token, broker = 'zerodha' } = req.body;
+    
+    console.log('Generic logout started:', {
+      broker,
+      has_session_token: !!session_token,
+      timestamp: new Date().toISOString()
+    });
+    
+    if (!session_token) {
+      return res.json({
+        success: true,
+        message: 'No session to clear',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Determine session key based on broker
+    let sessionKey;
+    if (broker === 'google') {
+      sessionKey = `google_session:${session_token}`;
+    } else {
+      sessionKey = `session:${session_token}`;  // Zerodha sessions
+    }
+    
+    try {
+      const deleted = await redisClient.del(sessionKey);
+      console.log(`Session removed: ${sessionKey}, deleted: ${deleted > 0}`);
+      
+      res.json({
+        success: true,
+        message: 'Logout successful',
+        session_cleared: deleted > 0,
+        broker,
+        timestamp: new Date().toISOString()
+      });
+    } catch (redisError) {
+      console.error('Redis cleanup failed:', redisError.message);
+      
+      // Still return success for logout
+      res.json({
+        success: true,
+        message: 'Logout completed (session cleanup failed)',
+        session_cleared: false,
+        broker,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+  } catch (error) {
+    console.error('Generic logout error:', error.message);
+    
+    // Always return success for logout (fail-safe)
+    res.json({
+      success: true,
+      message: 'Logout completed',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Session validation endpoint
+app.get('/api/auth/validate', async (req, res) => {
+  try {
+    const { session_token, broker = 'zerodha' } = req.query;
+    
+    if (!session_token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Session token is required',
+        valid: false
+      });
+    }
+    
+    // Determine session key based on broker
+    let sessionKey;
+    if (broker === 'google') {
+      sessionKey = `google_session:${session_token}`;
+    } else {
+      sessionKey = `session:${session_token}`;
+    }
+    
+    try {
+      const sessionData = await redisClient.get(sessionKey);
+      
+      if (!sessionData) {
+        return res.json({
+          success: true,
+          valid: false,
+          message: 'Session not found or expired',
+          broker
+        });
+      }
+      
+      const session = JSON.parse(sessionData);
+      const now = new Date();
+      
+      // Check if Google session has expired
+      if (broker === 'google' && session.expires_at) {
+        const expiresAt = new Date(session.expires_at);
+        if (now > expiresAt) {
+          // Clean up expired session
+          await redisClient.del(sessionKey);
+          return res.json({
+            success: true,
+            valid: false,
+            message: 'Session expired',
+            broker
+          });
+        }
+      }
+      
+      res.json({
+        success: true,
+        valid: true,
+        message: 'Session is valid',
+        broker,
+        user_id: session.user_data?.user_id || session.user_id,
+        expires_at: session.expires_at || null
+      });
+      
+    } catch (redisError) {
+      console.error('Redis session validation failed:', redisError.message);
+      res.status(500).json({
+        success: false,
+        error: 'Session validation failed',
+        valid: false
+      });
+    }
+    
+  } catch (error) {
+    console.error('Session validation error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      valid: false
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Zerodha backend API listening on port ${PORT}`);
 });
