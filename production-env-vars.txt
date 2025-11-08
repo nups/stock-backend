@@ -1,0 +1,15 @@
+# Production Environment Variables for Whitelist System
+# Add these to your Azure Web App Configuration
+
+ENABLE_WHITELIST=true
+INITIAL_ADMIN_SETUP_KEY=your-secure-production-setup-key-2024
+SUPER_ADMIN_MODE=false
+
+# Google OAuth (if not already set)
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# Azure Cognitive Search (if not already set)
+AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
+AZURE_SEARCH_INDEX=your-search-index
+AZURE_SEARCH_QUERY_KEY=your-search-query-key
