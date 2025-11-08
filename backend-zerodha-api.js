@@ -315,7 +315,7 @@ app.use(cors({
     'https://nups.github.io',
     'https://nups.github.io/stockapi',
     'http://localhost:5500', // for local development
-    'http://localhost:3000'
+    'http://localhost:3000'  // Google OAuth frontend
   ],
   credentials: true
 }));
@@ -730,6 +730,188 @@ app.get('/api/stock-details/:symbol', async (req, res) => {
       symbol: req.params.symbol,
       success: false,
       error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Google OAuth 2.0 token exchange endpoint
+app.post('/api/auth/google/token', async (req, res) => {
+  try {
+    const { code, redirect_uri } = req.body;
+    
+    // Validate required parameters
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        error: 'Authorization code is required'
+      });
+    }
+    
+    if (!redirect_uri) {
+      return res.status(400).json({
+        success: false,
+        error: 'Redirect URI is required'
+      });
+    }
+    
+    // Validate environment variables
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    
+    if (!clientId || !clientSecret) {
+      console.error('Missing Google OAuth credentials:', {
+        clientId: clientId ? 'Present' : 'Missing',
+        clientSecret: clientSecret ? 'Present' : 'Missing'
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'Google OAuth configuration is incomplete'
+      });
+    }
+    
+    console.log('Google OAuth token exchange started:', {
+      code: code.substring(0, 20) + '...',  // Log partial code for debugging
+      redirect_uri,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Step 1: Exchange authorization code for access token
+    const tokenRequestData = {
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri,
+      grant_type: 'authorization_code'
+    };
+    
+    console.log('Exchanging code for access token...');
+    const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', tokenRequestData, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 10000  // 10 second timeout
+    });
+    
+    const { access_token, token_type, expires_in, refresh_token, scope } = tokenResponse.data;
+    
+    if (!access_token) {
+      console.error('No access token received from Google');
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to obtain access token from Google'
+      });
+    }
+    
+    console.log('Access token received successfully:', {
+      token_type,
+      expires_in,
+      scope,
+      has_refresh_token: !!refresh_token
+    });
+    
+    // Step 2: Use access token to fetch user profile
+    console.log('Fetching user profile from Google...');
+    const userResponse = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: {
+        'Authorization': `${token_type} ${access_token}`,
+        'Accept': 'application/json'
+      },
+      timeout: 10000  // 10 second timeout
+    });
+    
+    const googleUser = userResponse.data;
+    console.log('User profile received:', {
+      id: googleUser.id,
+      name: googleUser.name,
+      email: googleUser.email,
+      verified_email: googleUser.verified_email,
+      has_picture: !!googleUser.picture
+    });
+    
+    // Step 3: Format user data according to requirements
+    const userData = {
+      user_id: googleUser.id,
+      user_name: googleUser.name || 'Google User',
+      email: googleUser.email,
+      picture: googleUser.picture || null,
+      broker: 'google',
+      verified_email: googleUser.verified_email || false,
+      locale: googleUser.locale || null,
+      created_at: new Date().toISOString()
+    };
+    
+    // Step 4: Generate session token and store user data in Redis (optional)
+    const sessionToken = crypto.randomBytes(32).toString('hex');
+    
+    try {
+      // Store Google user session in Redis (expires in 1 hour)
+      await redisClient.setEx(`google_session:${sessionToken}`, 3600, JSON.stringify({
+        access_token,
+        refresh_token,
+        user_data: userData,
+        expires_at: new Date(Date.now() + (expires_in * 1000)).toISOString()
+      }));
+      
+      console.log(`Google user session stored: ${userData.user_id} with session: ${sessionToken}`);
+    } catch (redisError) {
+      console.error('Redis storage failed (non-critical):', redisError.message);
+      // Continue without Redis storage
+    }
+    
+    // Step 5: Return successful response
+    const response = {
+      success: true,
+      access_token,
+      user: userData,
+      session_token: sessionToken,  // Optional: for session management
+      expires_in,
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log('Google OAuth flow completed successfully for user:', userData.user_name);
+    res.json(response);
+    
+  } catch (error) {
+    console.error('Google OAuth error:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      code: error.code,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Handle specific error cases
+    let errorMessage = 'Internal server error during Google OAuth';
+    let statusCode = 500;
+    
+    if (error.response) {
+      // HTTP error from Google APIs
+      statusCode = error.response.status;
+      
+      if (statusCode === 400) {
+        errorMessage = 'Invalid authorization code or redirect URI';
+      } else if (statusCode === 401) {
+        errorMessage = 'Invalid or expired authorization code';
+      } else if (statusCode === 403) {
+        errorMessage = 'Google OAuth access forbidden - check client configuration';
+      } else if (statusCode >= 500) {
+        errorMessage = 'Google services temporarily unavailable';
+      }
+    } else if (error.code === 'ECONNABORTED') {
+      errorMessage = 'Request timeout - Google services may be slow';
+      statusCode = 408;
+    } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      errorMessage = 'Unable to connect to Google services';
+      statusCode = 503;
+    }
+    
+    res.status(statusCode).json({
+      success: false,
+      error: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
       timestamp: new Date().toISOString()
     });
   }

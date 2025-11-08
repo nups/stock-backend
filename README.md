@@ -5,9 +5,13 @@ A Node.js backend service for integrating with Zerodha Kite API to fetch stock m
 ## Features
 
 - OAuth authentication with Zerodha Kite API
+- **Google OAuth 2.0 authentication with real user profile data**
 - Fetch user holdings from Zerodha account
+- AI-powered stock recommendations using Google Gemini
+- Azure Cognitive Search integration for knowledge base
+- Redis session management
 - CORS enabled for cross-origin requests
-- Session management for access tokens
+- Comprehensive error handling and logging
 
 ## Setup
 
@@ -24,18 +28,38 @@ A Node.js backend service for integrating with Zerodha Kite API to fetch stock m
 
 3. **Environment Configuration**
    - Copy `.env.example` to `.env`
-   - Fill in your Zerodha Kite API credentials in `.env`:
-     ```
+   - Fill in your credentials in `.env`:
+     ```bash
+     # Zerodha Configuration
      KITE_API_KEY=your_api_key_here
      KITE_API_SECRET=your_api_secret_here
      KITE_REDIRECT_URL=your_redirect_url_here
+     
+     # Google OAuth 2.0 Configuration
+     GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
+     GOOGLE_CLIENT_SECRET=your_google_client_secret
+     
+     # Redis Configuration
+     REDIS_URL=redis://localhost:6379
+     
+     # Server Configuration
      PORT=3001
      ```
 
-4. **Get Zerodha Kite API Credentials**
+4. **Get API Credentials**
+
+   **Zerodha Kite API:**
    - Sign up for a Kite Connect app at [Kite Connect](https://kite.trade/)
    - Get your API key and secret
    - Set the redirect URL to match your deployment URL
+
+   **Google OAuth 2.0:**
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select existing one
+   - Enable Google+ API and Google People API
+   - Create OAuth 2.0 credentials (Web application)
+   - Add your domain to authorized origins
+   - Add `http://localhost:3000` for development
 
 ## Usage
 
@@ -45,9 +69,43 @@ A Node.js backend service for integrating with Zerodha Kite API to fetch stock m
    ```
 
 2. **API Endpoints**
+
+   **Zerodha Integration:**
    - `GET /api/zerodha/auth/login` - Initiates OAuth login with Zerodha
    - `GET /api/zerodha/auth/callback` - OAuth callback endpoint
    - `GET /api/zerodha/holdings` - Fetch user holdings (requires authentication)
+   - `GET /api/zerodha/holdings-ai` - Fetch holdings with AI recommendations
+
+   **Google OAuth 2.0:**
+   - `POST /api/auth/google/token` - Exchange authorization code for access token and user profile
+     ```json
+     // Request Body:
+     {
+       "code": "authorization_code_from_google",
+       "redirect_uri": "http://localhost:3000/auth/callback"
+     }
+     
+     // Response:
+     {
+       "success": true,
+       "access_token": "google_access_token",
+       "user": {
+         "user_id": "google_user_id",
+         "user_name": "John Doe",
+         "email": "john@example.com",
+         "picture": "https://profile_picture_url",
+         "broker": "google"
+       }
+     }
+     ```
+
+   **Stock Data:**
+   - `GET /api/stock-price/:symbol` - Get current stock price
+   - `GET /api/stock-details/:symbol` - Get comprehensive stock information
+
+   **Search & Health:**
+   - `GET /api/search` - Query Azure Cognitive Search
+   - `GET /health` - Health check endpoint
 
 ## Deployment
 
