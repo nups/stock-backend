@@ -6,10 +6,12 @@ A Node.js backend service for integrating with Zerodha Kite API to fetch stock m
 
 - OAuth authentication with Zerodha Kite API
 - **Google OAuth 2.0 authentication with real user profile data**
+- **User Whitelisting & Access Control** - Restrict access to authorized users only
 - Fetch user holdings from Zerodha account
 - AI-powered stock recommendations using Google Gemini
 - Azure Cognitive Search integration for knowledge base
-- Redis session management
+- Redis session management with whitelist storage
+- Admin endpoints for user management
 - CORS enabled for cross-origin requests
 - Comprehensive error handling and logging
 
@@ -38,6 +40,11 @@ A Node.js backend service for integrating with Zerodha Kite API to fetch stock m
      # Google OAuth 2.0 Configuration
      GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
      GOOGLE_CLIENT_SECRET=your_google_client_secret
+     
+     # Whitelist Configuration
+     ENABLE_WHITELIST=true
+     ADMIN_EMAIL=your-admin-email@example.com
+     ADMIN_KEY=your-secure-admin-key
      
      # Redis Configuration
      REDIS_URL=redis://localhost:6379
@@ -103,9 +110,102 @@ A Node.js backend service for integrating with Zerodha Kite API to fetch stock m
    - `GET /api/stock-price/:symbol` - Get current stock price
    - `GET /api/stock-details/:symbol` - Get comprehensive stock information
 
+   **User Whitelist Management (Admin Only):**
+   - `GET /api/admin/whitelist/status` - Get whitelist status and users
+   - `POST /api/admin/whitelist/add` - Add user to whitelist
+   - `POST /api/admin/whitelist/remove` - Remove user from whitelist
+   - `POST /api/admin/whitelist/bulk-add` - Add multiple users
+   - `GET /api/admin/whitelist/check` - Check if user is whitelisted
+   - `GET /api/whitelist-info` - Public whitelist status
+
    **Search & Health:**
    - `GET /api/search` - Query Azure Cognitive Search
    - `GET /health` - Health check endpoint
+
+## User Whitelist & Access Control
+
+The application includes a comprehensive user whitelisting system to restrict access to authorized users only.
+
+### Configuration
+
+**Enable/Disable Whitelist:**
+```bash
+ENABLE_WHITELIST=true  # Set to false to allow all users
+INITIAL_ADMIN_SETUP_KEY=secure-setup-key-123  # One-time key for first admin
+SUPER_ADMIN_MODE=false  # Emergency bypass (dev only, never use in production)
+```
+
+### How It Works
+
+1. **Initial Setup**: Use `INITIAL_ADMIN_SETUP_KEY` to create the first admin via `/api/admin/setup`
+2. **Session-Based Admin**: Admins must log in (Google/Zerodha) and use their session tokens
+3. **Dual Storage**: Separate Redis sets for admins (`admin_whitelist`) and users (`user_whitelist`)
+4. **Secure Access**: No hardcoded emails or predictable admin keys
+5. **Multi-Admin**: Support for multiple administrators with equal privileges
+
+### Admin Management APIs
+
+**🔧 Initial Setup (One-time only):**
+```bash
+curl -X POST http://localhost:3001/api/admin/setup \
+  -H "Content-Type: application/json" \
+  -d '{"setup_key": "your-setup-key", "admin_identifier": "admin@example.com"}'
+```
+
+**All other admin endpoints require admin session token:**
+
+**Add User to Whitelist:**
+```bash
+curl -X POST http://localhost:3001/api/admin/whitelist/add \
+  -H "Content-Type: application/json" \
+  -d '{"identifier": "user@example.com", "session_token": "admin-session-token"}'
+```
+
+**Add New Admin:**
+```bash
+curl -X POST http://localhost:3001/api/admin/add-admin \
+  -H "Content-Type: application/json" \
+  -d '{"identifier": "newadmin@example.com", "session_token": "admin-session-token"}'
+```
+
+**Check Status:**
+```bash
+curl "http://localhost:3001/api/admin/whitelist/status?session=admin-session-token"
+```
+
+### User Experience
+
+**For Whitelisted Users:**
+- Normal access to all features
+- Seamless authentication flow
+
+**For Non-Whitelisted Users:**
+- `403 Forbidden` response with clear message
+- Instruction to contact support for access
+
+**Error Response Example:**
+```json
+{
+  "error": "Access denied. Your account is not authorized to use this service.",
+  "message": "Please contact support to request access.",
+  "user_email": "user@example.com",
+  "whitelist_enabled": true
+}
+```
+
+### Protected Endpoints
+
+The following endpoints require whitelisted users:
+- `/api/zerodha/holdings` - Stock holdings data
+- `/api/zerodha/holdings-ai` - AI-enhanced holdings
+- Google OAuth authentication (checks during login)
+
+### Deployment Considerations
+
+- Set strong `ADMIN_KEY` in production
+- Use environment variables for configuration
+- Monitor Redis storage for whitelist data
+- Consider backup/restore procedures for whitelist
 
 ## Deployment
 

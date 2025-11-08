@@ -52,12 +52,24 @@ redisClient.connect().catch(err => {
   process.exit(1);
 });
 
+// Initialize system after Redis connection
+redisClient.on('ready', () => {
+  initializeSystem();
+});
+
 // --- Azure Cognitive Search configuration ---
 // Prefer environment variables, fallback to the values you provided.
 const AZURE_SEARCH_ENDPOINT = process.env.AZURE_SEARCH_ENDPOINT;
 const AZURE_SEARCH_INDEX = process.env.AZURE_SEARCH_INDEX;
 const AZURE_SEARCH_QUERY_KEY = process.env.AZURE_SEARCH_QUERY_KEY;
 const AZURE_SEARCH_API_VERSION = '2020-06-30'; // stable API version for simple search operations
+
+// --- Whitelist Configuration ---
+const ENABLE_WHITELIST = process.env.ENABLE_WHITELIST === 'true'; // Enable/disable whitelist feature
+const WHITELIST_KEY = 'user_whitelist'; // Redis key for storing whitelist
+const ADMIN_WHITELIST_KEY = 'admin_whitelist'; // Redis key for storing admin users
+const INITIAL_ADMIN_SETUP_KEY = process.env.INITIAL_ADMIN_SETUP_KEY; // One-time setup key
+const SUPER_ADMIN_MODE = process.env.SUPER_ADMIN_MODE === 'true'; // Bypass whitelist entirely (dev only)
 
 /**
  * Perform a simple search against Azure Cognitive Search index.
@@ -94,6 +106,295 @@ async function azureGetDocumentById(id) {
     }
   });
   return resp.data;
+}
+
+// --- Whitelist Management Functions ---
+
+/**
+ * Check if a user (email or user_id) is whitelisted
+ * @param {string} identifier - email or user_id to check
+ * @returns {boolean} - true if whitelisted, false otherwise
+ */
+async function isUserWhitelisted(identifier) {
+  if (!ENABLE_WHITELIST) {
+    return true; // If whitelist is disabled, allow everyone
+  }
+  
+  if (!identifier) {
+    return false;
+  }
+  
+  try {
+    // Check if identifier is in the whitelist set
+    const isWhitelisted = await redisClient.sIsMember(WHITELIST_KEY, identifier.toLowerCase());
+    return isWhitelisted;
+  } catch (error) {
+    console.error('Error checking whitelist:', error);
+    return false; // Fail closed - deny access on error
+  }
+}
+
+/**
+ * Add user to whitelist
+ * @param {string} identifier - email or user_id to add
+ * @returns {boolean} - true if added successfully
+ */
+async function addToWhitelist(identifier) {
+  if (!identifier) return false;
+  
+  try {
+    const added = await redisClient.sAdd(WHITELIST_KEY, identifier.toLowerCase());
+    console.log(`User ${identifier} added to whitelist. New addition: ${added > 0}`);
+    return true;
+  } catch (error) {
+    console.error('Error adding to whitelist:', error);
+    return false;
+  }
+}
+
+/**
+ * Remove user from whitelist
+ * @param {string} identifier - email or user_id to remove
+ * @returns {boolean} - true if removed successfully
+ */
+async function removeFromWhitelist(identifier) {
+  if (!identifier) return false;
+  
+  try {
+    const removed = await redisClient.sRem(WHITELIST_KEY, identifier.toLowerCase());
+    console.log(`User ${identifier} removed from whitelist. Was present: ${removed > 0}`);
+    return true;
+  } catch (error) {
+    console.error('Error removing from whitelist:', error);
+    return false;
+  }
+}
+
+/**
+ * Get all whitelisted users
+ * @returns {Array} - array of whitelisted identifiers
+ */
+async function getWhitelistedUsers() {
+  try {
+    const users = await redisClient.sMembers(WHITELIST_KEY);
+    return users;
+  } catch (error) {
+    console.error('Error getting whitelist:', error);
+    return [];
+  }
+}
+
+/**
+ * Check if a user is an admin
+ * @param {string} identifier - email or user_id to check
+ * @returns {boolean} - true if admin, false otherwise
+ */
+async function isUserAdmin(identifier) {
+  if (!identifier) return false;
+  
+  try {
+    const isAdmin = await redisClient.sIsMember(ADMIN_WHITELIST_KEY, identifier.toLowerCase());
+    return isAdmin;
+  } catch (error) {
+    console.error('Error checking admin status:', error);
+    return false;
+  }
+}
+
+/**
+ * Add user to admin list
+ * @param {string} identifier - email or user_id to add as admin
+ * @returns {boolean} - true if added successfully
+ */
+async function addAdmin(identifier) {
+  if (!identifier) return false;
+  
+  try {
+    const added = await redisClient.sAdd(ADMIN_WHITELIST_KEY, identifier.toLowerCase());
+    console.log(`Admin ${identifier} added. New addition: ${added > 0}`);
+    return true;
+  } catch (error) {
+    console.error('Error adding admin:', error);
+    return false;
+  }
+}
+
+/**
+ * Get all admin users
+ * @returns {Array} - array of admin identifiers
+ */
+async function getAdminUsers() {
+  try {
+    const admins = await redisClient.sMembers(ADMIN_WHITELIST_KEY);
+    return admins;
+  } catch (error) {
+    console.error('Error getting admin list:', error);
+    return [];
+  }
+}
+
+/**
+ * Initialize system - setup initial state
+ */
+async function initializeSystem() {
+  try {
+    // Check if any admins exist
+    const adminCount = await redisClient.sCard(ADMIN_WHITELIST_KEY);
+    
+    if (adminCount === 0) {
+      console.log('⚠️  No admins found. System is in setup mode.');
+      console.log('💡 Use INITIAL_ADMIN_SETUP_KEY to create first admin via API');
+      console.log('🔗 POST /api/admin/setup with setup_key and admin_identifier');
+    } else {
+      const admins = await getAdminUsers();
+      console.log(`✅ System initialized with ${adminCount} admin(s):`, admins.map(a => a.substring(0, 3) + '***'));
+    }
+    
+    // Log whitelist status
+    const whitelistCount = await redisClient.sCard(WHITELIST_KEY);
+    console.log(`📋 Whitelist contains ${whitelistCount} user(s)`);
+    
+  } catch (error) {
+    console.error('Error initializing system:', error);
+  }
+}
+
+// --- Authentication Middleware ---
+
+/**
+ * Middleware to check if user is whitelisted (for session-based auth)
+ */
+async function checkWhitelistMiddleware(req, res, next) {
+  if (!ENABLE_WHITELIST) {
+    return next(); // Skip if whitelist is disabled
+  }
+  
+  try {
+    const sessionToken = req.query.session || req.body.session_token;
+    
+    if (!sessionToken) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        whitelist_enabled: true
+      });
+    }
+    
+    // Get session data from Redis (try both Zerodha and Google sessions)
+    let sessionData = await redisClient.get(`session:${sessionToken}`);
+    let userIdentifier = null;
+    
+    if (sessionData) {
+      // Zerodha session
+      const session = JSON.parse(sessionData);
+      userIdentifier = session.user_id;
+    } else {
+      // Try Google session
+      sessionData = await redisClient.get(`google_session:${sessionToken}`);
+      if (sessionData) {
+        const session = JSON.parse(sessionData);
+        userIdentifier = session.user_data?.email || session.user_data?.user_id;
+      }
+    }
+    
+    if (!userIdentifier) {
+      return res.status(401).json({
+        error: 'Invalid or expired session',
+        whitelist_enabled: true
+      });
+    }
+    
+    // Check if user is whitelisted
+    const isWhitelisted = await isUserWhitelisted(userIdentifier);
+    
+    if (!isWhitelisted) {
+      console.log(`Access denied for non-whitelisted user: ${userIdentifier}`);
+      return res.status(403).json({
+        error: 'Access denied. Your account is not authorized to use this service.',
+        message: 'Please contact support to request access.',
+        user_id: userIdentifier,
+        whitelist_enabled: true
+      });
+    }
+    
+    // Add user info to request for downstream use
+    req.user = { identifier: userIdentifier, whitelisted: true };
+    next();
+    
+  } catch (error) {
+    console.error('Whitelist middleware error:', error);
+    res.status(500).json({
+      error: 'Authentication service error',
+      whitelist_enabled: true
+    });
+  }
+}
+
+/**
+ * Check if user is admin (for whitelist management)
+ * Now uses session-based admin checking instead of just admin key
+ */
+async function checkAdminMiddleware(req, res, next) {
+  try {
+    // Super admin mode bypass (development only)
+    if (SUPER_ADMIN_MODE) {
+      console.log('⚠️  SUPER_ADMIN_MODE is enabled - bypassing admin check');
+      req.user = { identifier: 'super_admin', is_admin: true };
+      return next();
+    }
+    
+    const sessionToken = req.query.session || req.body.session_token;
+    
+    if (!sessionToken) {
+      return res.status(401).json({
+        error: 'Admin session required',
+        message: 'You must be logged in as an admin to perform this action'
+      });
+    }
+    
+    // Get session data from Redis (try both Zerodha and Google sessions)
+    let sessionData = await redisClient.get(`session:${sessionToken}`);
+    let userIdentifier = null;
+    
+    if (sessionData) {
+      // Zerodha session
+      const session = JSON.parse(sessionData);
+      userIdentifier = session.user_id;
+    } else {
+      // Try Google session
+      sessionData = await redisClient.get(`google_session:${sessionToken}`);
+      if (sessionData) {
+        const session = JSON.parse(sessionData);
+        userIdentifier = session.user_data?.email || session.user_data?.user_id;
+      }
+    }
+    
+    if (!userIdentifier) {
+      return res.status(401).json({
+        error: 'Invalid or expired session',
+        message: 'Please log in again'
+      });
+    }
+    
+    // Check if user is an admin
+    const isAdmin = await isUserAdmin(userIdentifier);
+    
+    if (!isAdmin) {
+      console.log(`Admin access denied for user: ${userIdentifier}`);
+      return res.status(403).json({
+        error: 'Admin privileges required',
+        message: 'Only administrators can perform this action',
+        user_id: userIdentifier
+      });
+    }
+    
+    // Add admin info to request
+    req.user = { identifier: userIdentifier, is_admin: true };
+    next();
+    
+  } catch (error) {
+    console.error('Admin middleware error:', error);
+    res.status(500).json({ error: 'Admin authentication service error' });
+  }
 }
 
 // Hybrid AI Analysis Function - Quick and Detailed modes with Knowledge Base Context
@@ -420,7 +721,7 @@ app.get('/api/zerodha/auth/callback', async (req, res) => {
 });
 
 // Step 2: Fetch holdings API
-app.get('/api/zerodha/holdings', async (req, res) => {
+app.get('/api/zerodha/holdings', checkWhitelistMiddleware, async (req, res) => {
   const sessionToken = req.query.session;
   
   if (!sessionToken) {
@@ -465,7 +766,7 @@ app.get('/api/zerodha/holdings', async (req, res) => {
 });
 
 // Step 3: Fetch holdings with AI recommendations
-app.get('/api/zerodha/holdings-ai', async (req, res) => {
+app.get('/api/zerodha/holdings-ai', checkWhitelistMiddleware, async (req, res) => {
   const sessionToken = req.query.session;
   const analysisMode = req.query.mode || 'quick'; // Default to quick, allow ?mode=detailed
   
@@ -842,6 +1143,31 @@ app.post('/api/auth/google/token', async (req, res) => {
       created_at: new Date().toISOString()
     };
     
+    // Check if user is whitelisted (if whitelist is enabled)
+    if (ENABLE_WHITELIST) {
+      const userEmail = googleUser.email;
+      const userId = googleUser.id;
+      
+      // Check both email and user ID for whitelist
+      const emailWhitelisted = await isUserWhitelisted(userEmail);
+      const idWhitelisted = await isUserWhitelisted(userId);
+      
+      if (!emailWhitelisted && !idWhitelisted) {
+        console.log(`Access denied for non-whitelisted Google user: ${userEmail} (${userId})`);
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. Your account is not authorized to use this service.',
+          message: 'Please contact support to request access.',
+          user_email: userEmail,
+          user_id: userId,
+          whitelist_enabled: true,
+          support_contact: 'Please contact support for access requests.'
+        });
+      }
+      
+      console.log(`Whitelisted Google user authenticated: ${userEmail}`);
+    }
+    
     // Step 4: Generate session token and store user data in Redis (optional)
     const sessionToken = crypto.randomBytes(32).toString('hex');
     
@@ -1135,8 +1461,352 @@ app.get('/api/auth/validate', async (req, res) => {
   }
 });
 
+// --- Initial System Setup Endpoint ---
+
+// One-time setup endpoint to create the first admin
+app.post('/api/admin/setup', async (req, res) => {
+  try {
+    const { setup_key, admin_identifier } = req.body;
+    
+    // Check if setup key is provided and correct
+    if (!INITIAL_ADMIN_SETUP_KEY || setup_key !== INITIAL_ADMIN_SETUP_KEY) {
+      return res.status(403).json({
+        error: 'Invalid setup key',
+        message: 'Setup key is required for initial admin creation'
+      });
+    }
+    
+    if (!admin_identifier) {
+      return res.status(400).json({
+        error: 'Admin identifier required',
+        message: 'Please provide admin_identifier (email or user_id)'
+      });
+    }
+    
+    // Check if any admins already exist
+    const existingAdminCount = await redisClient.sCard(ADMIN_WHITELIST_KEY);
+    if (existingAdminCount > 0) {
+      return res.status(409).json({
+        error: 'System already initialized',
+        message: 'Admin users already exist. Use admin endpoints for further management.',
+        existing_admins: existingAdminCount
+      });
+    }
+    
+    // Create first admin
+    const adminAdded = await addAdmin(admin_identifier);
+    const whitelistAdded = await addToWhitelist(admin_identifier); // Also add to whitelist
+    
+    if (adminAdded && whitelistAdded) {
+      console.log(`🎉 System initialized with first admin: ${admin_identifier}`);
+      res.json({
+        success: true,
+        message: 'System initialized successfully',
+        admin_identifier: admin_identifier.toLowerCase(),
+        note: 'This setup endpoint is now disabled. Use admin session-based endpoints.',
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to initialize system',
+        message: 'Could not create admin user'
+      });
+    }
+    
+  } catch (error) {
+    console.error('Setup error:', error);
+    res.status(500).json({
+      error: 'Setup failed',
+      message: 'Internal server error during setup'
+    });
+  }
+});
+
+// --- Whitelist Management Endpoints (Admin Only) ---
+
+// Get whitelist status and configuration
+app.get('/api/admin/whitelist/status', checkAdminMiddleware, async (req, res) => {
+  try {
+    const users = await getWhitelistedUsers();
+    const admins = await getAdminUsers();
+    
+    res.json({
+      success: true,
+      system_status: {
+        whitelist_enabled: ENABLE_WHITELIST,
+        super_admin_mode: SUPER_ADMIN_MODE,
+        setup_key_configured: !!INITIAL_ADMIN_SETUP_KEY
+      },
+      admin_info: {
+        requesting_admin: req.user.identifier,
+        total_admins: admins.length,
+        admin_users: admins.map(admin => ({
+          identifier: admin.substring(0, 3) + '***' + admin.slice(-3),
+          is_you: admin === req.user.identifier.toLowerCase()
+        }))
+      },
+      whitelist_info: {
+        total_users: users.length,
+        whitelisted_users: users.slice(0, 20) // Limit to first 20 for performance
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error getting whitelist status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get whitelist status'
+    });
+  }
+});
+
+// Add user to whitelist
+app.post('/api/admin/whitelist/add', checkAdminMiddleware, async (req, res) => {
+  try {
+    const { identifier } = req.body;
+    
+    if (!identifier) {
+      return res.status(400).json({
+        success: false,
+        error: 'User identifier (email or user_id) is required'
+      });
+    }
+    
+    const success = await addToWhitelist(identifier);
+    
+    if (success) {
+      const isNewlyAdded = await isUserWhitelisted(identifier);
+      res.json({
+        success: true,
+        message: `User ${identifier} added to whitelist`,
+        identifier: identifier.toLowerCase(),
+        verified: isNewlyAdded,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to add user to whitelist'
+      });
+    }
+  } catch (error) {
+    console.error('Error adding to whitelist:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Remove user from whitelist
+app.post('/api/admin/whitelist/remove', checkAdminMiddleware, async (req, res) => {
+  try {
+    const { identifier } = req.body;
+    
+    if (!identifier) {
+      return res.status(400).json({
+        success: false,
+        error: 'User identifier (email or user_id) is required'
+      });
+    }
+    
+    // Prevent removing admin
+    if (identifier.toLowerCase() === ADMIN_EMAIL?.toLowerCase()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot remove admin user from whitelist'
+      });
+    }
+    
+    const success = await removeFromWhitelist(identifier);
+    
+    if (success) {
+      const stillExists = await isUserWhitelisted(identifier);
+      res.json({
+        success: true,
+        message: `User ${identifier} removed from whitelist`,
+        identifier: identifier.toLowerCase(),
+        verified: !stillExists,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to remove user from whitelist'
+      });
+    }
+  } catch (error) {
+    console.error('Error removing from whitelist:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Bulk add users to whitelist
+app.post('/api/admin/whitelist/bulk-add', checkAdminMiddleware, async (req, res) => {
+  try {
+    const { identifiers } = req.body;
+    
+    if (!Array.isArray(identifiers) || identifiers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Array of identifiers is required'
+      });
+    }
+    
+    const results = [];
+    let successCount = 0;
+    
+    for (const identifier of identifiers) {
+      if (identifier && typeof identifier === 'string') {
+        const success = await addToWhitelist(identifier);
+        results.push({
+          identifier: identifier.toLowerCase(),
+          success
+        });
+        if (success) successCount++;
+      } else {
+        results.push({
+          identifier,
+          success: false,
+          error: 'Invalid identifier'
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Bulk add completed: ${successCount}/${identifiers.length} users added`,
+      results,
+      summary: {
+        total: identifiers.length,
+        successful: successCount,
+        failed: identifiers.length - successCount
+      },
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Error bulk adding to whitelist:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Check if specific user is whitelisted (useful for testing)
+app.get('/api/admin/whitelist/check', checkAdminMiddleware, async (req, res) => {
+  try {
+    const { identifier } = req.query;
+    
+    if (!identifier) {
+      return res.status(400).json({
+        success: false,
+        error: 'User identifier is required as query parameter'
+      });
+    }
+    
+    const isWhitelisted = await isUserWhitelisted(identifier);
+    
+    res.json({
+      success: true,
+      identifier: identifier.toLowerCase(),
+      is_whitelisted: isWhitelisted,
+      whitelist_enabled: ENABLE_WHITELIST,
+      message: isWhitelisted ? 'User is whitelisted' : 'User is not whitelisted',
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Error checking whitelist:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Add new admin (existing admin required)
+app.post('/api/admin/add-admin', checkAdminMiddleware, async (req, res) => {
+  try {
+    const { identifier } = req.body;
+    
+    if (!identifier) {
+      return res.status(400).json({
+        error: 'Admin identifier required',
+        message: 'Please provide identifier (email or user_id) for new admin'
+      });
+    }
+    
+    // Add as admin and to whitelist
+    const adminAdded = await addAdmin(identifier);
+    const whitelistAdded = await addToWhitelist(identifier);
+    
+    if (adminAdded && whitelistAdded) {
+      console.log(`New admin added by ${req.user.identifier}: ${identifier}`);
+      res.json({
+        success: true,
+        message: `User ${identifier} is now an admin`,
+        added_by: req.user.identifier,
+        new_admin: identifier.toLowerCase(),
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to add admin',
+        message: 'Could not grant admin privileges'
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error adding admin:', error);
+    res.status(500).json({ error: 'Failed to add admin' });
+  }
+});
+
+// Public endpoint to check whitelist status (no admin required)
+app.get('/api/whitelist-info', async (req, res) => {
+  try {
+    const adminCount = await redisClient.sCard(ADMIN_WHITELIST_KEY);
+    const setupRequired = adminCount === 0;
+    
+    res.json({
+      whitelist_enabled: ENABLE_WHITELIST,
+      setup_required: setupRequired,
+      message: ENABLE_WHITELIST 
+        ? (setupRequired 
+          ? 'This service requires setup. Please configure initial admin.'
+          : 'This service requires user authorization. Please contact support if you need access.')
+        : 'This service is open to all users.',
+      setup_endpoint: setupRequired ? '/api/admin/setup' : null,
+      support_contact: 'Please contact support for access requests.',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Unable to get whitelist information'
+    });
+  }
+});
+
 app.listen(PORT, () => {
-  console.log(`Zerodha backend API listening on port ${PORT}`);
+  console.log(`🚀 Zerodha backend API listening on port ${PORT}`);
+  console.log(`🔐 Whitelist enabled: ${ENABLE_WHITELIST}`);
+  console.log(`⚡ Super admin mode: ${SUPER_ADMIN_MODE || false}`);
+  console.log(`🔑 Setup key configured: ${!!INITIAL_ADMIN_SETUP_KEY}`);
+  
+  if (ENABLE_WHITELIST && !INITIAL_ADMIN_SETUP_KEY) {
+    console.log('\n⚠️  WARNING: Whitelist is enabled but no setup key is configured!');
+    console.log('💡 Set INITIAL_ADMIN_SETUP_KEY in your environment to enable admin setup');
+  }
+  
+  console.log('\n📖 Admin Setup Instructions:');
+  console.log('1. Set INITIAL_ADMIN_SETUP_KEY in your environment');
+  console.log('2. POST /api/admin/setup with setup_key and admin_identifier');
+  console.log('3. Login as that user and use admin endpoints with session token');
 });
 
 // Graceful shutdown handling
