@@ -16,7 +16,16 @@ const redirectUri = process.env.KITE_REDIRECT_URL;  // e.g. https://your-backend
 
 // Google Gemini AI client setup (FREE)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+
+// Available models to try (in order of preference)
+const AVAILABLE_MODELS = [
+  "gemini-1.5-flash",     // Newest, fastest
+  "gemini-1.5-pro",       // Newer, more capable
+  "gemini-pro"            // Original, most stable
+];
+
+let currentModelIndex = 0;
+let model = genAI.getGenerativeModel({ model: AVAILABLE_MODELS[currentModelIndex] });
 
 // Redis client setup
 const redisConfig = {
@@ -595,12 +604,33 @@ Respond ONLY with JSON:
     console.log('🔧 Gemini API setup check:');
     console.log('- API Key present:', !!process.env.GEMINI_API_KEY);
     console.log('- API Key preview:', process.env.GEMINI_API_KEY ? `${process.env.GEMINI_API_KEY.substring(0, 10)}...` : 'MISSING');
-    console.log('- Model name: gemini-pro');
+    console.log('- Current model:', AVAILABLE_MODELS[currentModelIndex]);
+    console.log('- Available models:', AVAILABLE_MODELS);
     console.log('- Model initialized:', !!model);
     console.log('- Prompt length:', prompt.length, 'characters');
     
-    console.log('🚀 Calling Gemini API with gemini-pro model...');
-    const result = await model.generateContent(prompt);
+    console.log(`🚀 Calling Gemini API with ${AVAILABLE_MODELS[currentModelIndex]} model...`);
+    let result;
+    
+    // Try current model, fallback to others if it fails
+    try {
+      result = await model.generateContent(prompt);
+    } catch (modelError) {
+      console.log(`❌ Model ${AVAILABLE_MODELS[currentModelIndex]} failed:`, modelError.message);
+      
+      // Try next available model
+      if (currentModelIndex < AVAILABLE_MODELS.length - 1) {
+        currentModelIndex++;
+        const fallbackModel = AVAILABLE_MODELS[currentModelIndex];
+        console.log(`🔄 Trying fallback model: ${fallbackModel}`);
+        
+        model = genAI.getGenerativeModel({ model: fallbackModel });
+        result = await model.generateContent(prompt);
+        console.log(`✅ Success with fallback model: ${fallbackModel}`);
+      } else {
+        throw modelError; // All models failed
+      }
+    }
     const aiResponse = result.response.text();
     
     console.log('Gemini AI Response with knowledge context:', aiResponse);
