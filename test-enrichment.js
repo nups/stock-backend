@@ -1,5 +1,5 @@
 // Test script for stock data enrichment functions
-const yahooFinance = require('yahoo-finance2').default;
+const yf = require('yahoo-finance2').default;
 
 /**
  * Fetch fundamental data from Yahoo Finance
@@ -11,29 +11,35 @@ async function fetchFundamentalData(symbol) {
     // Add .NS suffix for NSE stocks if not present
     const yahooSymbol = symbol.includes('.') ? symbol : `${symbol}.NS`;
     
-    // Fetch quote summary with all available modules
-    const quote = await yahooFinance.quoteSummary(yahooSymbol, {
-      modules: ['summaryDetail', 'financialData', 'defaultKeyStatistics', 'summaryProfile']
-    });
+    // Use quoteSummary - the correct v2 API (NOT deprecated when called correctly)
+    const queryOptions = { modules: ['price', 'summaryDetail', 'financialData'] };
+    const result = await yf.quoteSummary(yahooSymbol, queryOptions);
+    
+    const price = result.price || {};
+    const summary = result.summaryDetail || {};
+    const financial = result.financialData || {};
     
     const fundamentals = {
-      marketCap: quote.summaryDetail?.marketCap || null,
-      peRatio: quote.summaryDetail?.trailingPE || null,
-      pbRatio: quote.defaultKeyStatistics?.priceToBook || null,
-      dividendYield: quote.summaryDetail?.dividendYield || null,
-      roe: quote.financialData?.returnOnEquity || null,
-      debtToEquity: quote.financialData?.debtToEquity || null,
-      currentRatio: quote.financialData?.currentRatio || null,
-      profitMargin: quote.financialData?.profitMargins || null,
-      revenueGrowth: quote.financialData?.revenueGrowth || null,
-      earningsGrowth: quote.financialData?.earningsGrowth || null,
-      targetMeanPrice: quote.financialData?.targetMeanPrice || null,
-      recommendationKey: quote.financialData?.recommendationKey || null,
-      fiftyTwoWeekHigh: quote.summaryDetail?.fiftyTwoWeekHigh || null,
-      fiftyTwoWeekLow: quote.summaryDetail?.fiftyTwoWeekLow || null,
-      sector: quote.summaryProfile?.sector || null,
-      industry: quote.summaryProfile?.industry || null,
-      beta: quote.summaryDetail?.beta || null
+      marketCap: price.marketCap || summary.marketCap || null,
+      peRatio: summary.trailingPE || null,
+      pbRatio: summary.priceToBook || null,
+      dividendYield: summary.dividendYield || null,
+      roe: financial.returnOnEquity || null,
+      debtToEquity: financial.debtToEquity || null,
+      currentRatio: financial.currentRatio || null,
+      profitMargin: financial.profitMargins || null,
+      revenueGrowth: financial.revenueGrowth || null,
+      earningsGrowth: financial.earningsGrowth || null,
+      targetMeanPrice: financial.targetMeanPrice || null,
+      recommendationKey: financial.recommendationKey || null,
+      fiftyTwoWeekHigh: summary.fiftyTwoWeekHigh || null,
+      fiftyTwoWeekLow: summary.fiftyTwoWeekLow || null,
+      sector: price.sector || null,
+      industry: price.industry || null,
+      beta: summary.beta || null,
+      currentPrice: price.regularMarketPrice || null,
+      previousClose: price.regularMarketPreviousClose || null,
+      volume: price.regularMarketVolume || null
     };
     
     console.log(`✅ Fundamental data fetched for ${symbol}`);
@@ -59,7 +65,7 @@ async function fetchTechnicalData(symbol) {
     const startDate = new Date();
     startDate.setMonth(startDate.getMonth() - 3);
     
-    const history = await yahooFinance.historical(yahooSymbol, {
+    const history = await yf.historical(yahooSymbol, {
       period1: startDate,
       period2: endDate,
       interval: '1wk' // Weekly data
