@@ -17,15 +17,22 @@ const redirectUri = process.env.KITE_REDIRECT_URL;  // e.g. https://your-backend
 // Google Gemini AI client setup (FREE)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Available models to try (in order of preference)
-const AVAILABLE_MODELS = [
-  "gemini-1.5-flash",     // Newest, fastest
-  "gemini-1.5-pro",       // Newer, more capable
-  "gemini-pro"            // Original, most stable
-];
+// Google Gemini model - using gemini-pro (stable in v1beta API)
+const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
-let currentModelIndex = 0;
-let model = genAI.getGenerativeModel({ model: AVAILABLE_MODELS[currentModelIndex] });
+// Test function to verify Gemini API is working
+async function testGeminiAPI() {
+  try {
+    console.log('🧪 Testing Gemini API connection...');
+    const testResult = await model.generateContent("Say 'Hello, Gemini API is working!' in exactly those words.");
+    const response = testResult.response.text();
+    console.log('✅ Gemini API test successful:', response);
+    return true;
+  } catch (error) {
+    console.error('❌ Gemini API test failed:', error.message);
+    return false;
+  }
+}
 
 // Redis client setup
 const redisConfig = {
@@ -604,33 +611,12 @@ Respond ONLY with JSON:
     console.log('🔧 Gemini API setup check:');
     console.log('- API Key present:', !!process.env.GEMINI_API_KEY);
     console.log('- API Key preview:', process.env.GEMINI_API_KEY ? `${process.env.GEMINI_API_KEY.substring(0, 10)}...` : 'MISSING');
-    console.log('- Current model:', AVAILABLE_MODELS[currentModelIndex]);
-    console.log('- Available models:', AVAILABLE_MODELS);
+    console.log('- Model: gemini-pro (v1beta compatible)');
     console.log('- Model initialized:', !!model);
     console.log('- Prompt length:', prompt.length, 'characters');
     
-    console.log(`🚀 Calling Gemini API with ${AVAILABLE_MODELS[currentModelIndex]} model...`);
-    let result;
-    
-    // Try current model, fallback to others if it fails
-    try {
-      result = await model.generateContent(prompt);
-    } catch (modelError) {
-      console.log(`❌ Model ${AVAILABLE_MODELS[currentModelIndex]} failed:`, modelError.message);
-      
-      // Try next available model
-      if (currentModelIndex < AVAILABLE_MODELS.length - 1) {
-        currentModelIndex++;
-        const fallbackModel = AVAILABLE_MODELS[currentModelIndex];
-        console.log(`🔄 Trying fallback model: ${fallbackModel}`);
-        
-        model = genAI.getGenerativeModel({ model: fallbackModel });
-        result = await model.generateContent(prompt);
-        console.log(`✅ Success with fallback model: ${fallbackModel}`);
-      } else {
-        throw modelError; // All models failed
-      }
-    }
+    console.log('🚀 Calling Gemini API with gemini-pro model...');
+    const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
     
     console.log('Gemini AI Response with knowledge context:', aiResponse);
@@ -2041,6 +2027,38 @@ app.get('/api/whitelist-info', async (req, res) => {
   }
 });
 
+// Test endpoint to verify Gemini API is working
+app.get('/api/test/gemini', async (req, res) => {
+  try {
+    console.log('🧪 Gemini API test endpoint called');
+    const isWorking = await testGeminiAPI();
+    
+    if (isWorking) {
+      res.json({
+        status: 'success',
+        message: 'Gemini API is working correctly',
+        model: 'gemini-pro',
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        status: 'error',
+        message: 'Gemini API test failed',
+        model: 'gemini-pro',
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    console.error('Gemini test endpoint error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Gemini API test failed with exception',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Zerodha backend API listening on port ${PORT}`);
   console.log(`🔐 Whitelist enabled: ${ENABLE_WHITELIST}`);
@@ -2056,6 +2074,12 @@ app.listen(PORT, () => {
   console.log('1. Set INITIAL_ADMIN_SETUP_KEY in your environment');
   console.log('2. POST /api/admin/setup with setup_key and admin_identifier');
   console.log('3. Login as that user and use admin endpoints with session token');
+  
+  // Test Gemini API on startup
+  setTimeout(async () => {
+    console.log('\n🚀 Running startup Gemini API test...');
+    await testGeminiAPI();
+  }, 2000);
 });
 
 // Graceful shutdown handling
