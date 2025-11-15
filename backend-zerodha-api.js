@@ -770,6 +770,15 @@ app.get('/api/zerodha/holdings-ai', checkWhitelistMiddleware, async (req, res) =
   const sessionToken = req.query.session;
   const analysisMode = req.query.mode || 'quick'; // Default to quick, allow ?mode=detailed
   
+  // Check if this is a single stock analysis request
+  const symbol = req.query.symbol;
+  const company = req.query.company;
+  const stockname = req.query.stockname;
+  const trading_symbol = req.query.trading_symbol;
+  const industry = req.query.industry;
+  const current_price = req.query.current_price;
+  const entry_price = req.query.entry_price;
+  
   if (!sessionToken) {
     return res.status(400).json({ error: 'Session token is required' });
   }
@@ -785,6 +794,66 @@ app.get('/api/zerodha/holdings-ai', checkWhitelistMiddleware, async (req, res) =
     
     const { access_token: accessToken, user_id: userId } = JSON.parse(sessionData);
     
+    // Handle individual stock analysis
+    if (symbol || company || stockname) {
+      console.log('Fetching AI recommendation for:', company || stockname || symbol);
+      
+      // Create a mock stock object for individual analysis
+      const stockData = {
+        yahooSymbol: symbol || trading_symbol || 'N/A',
+        companyName: company || stockname || symbol || 'Unknown Company',
+        tradingsymbol: trading_symbol || symbol || 'N/A',
+        industry: industry || '',
+        suggested_price: parseFloat(entry_price) || 0,
+        last_price: parseFloat(current_price) || 0,
+        average_price: parseFloat(entry_price) || 0,
+        quantity: 1 // Default quantity for individual analysis
+      };
+      
+      console.log('Analyzing individual stock:', {
+        symbol: stockData.yahooSymbol,
+        company: stockData.companyName,
+        current_price: stockData.last_price,
+        entry_price: stockData.average_price
+      });
+      
+      // Get AI recommendation for the individual stock
+      const aiRecommendations = await getAIRecommendations([stockData], analysisMode);
+      
+      const recommendation = aiRecommendations[0] || {
+        symbol: stockData.tradingsymbol,
+        recommendation: "HOLD",
+        fundamental_score: 3,
+        technical_score: 3,
+        overall_score: 3.0,
+        reason: "No AI analysis available",
+        insight: "Manual review recommended"
+      };
+      
+      res.json({
+        stock_analysis: {
+          ...stockData,
+          ai_recommendation: recommendation
+        },
+        analysis_mode: analysisMode,
+        ai_analysis_status: aiRecommendations.length > 0 ? 'success' : 'partial',
+        analysis_timestamp: new Date().toISOString(),
+        query_parameters: {
+          symbol,
+          company,
+          stockname,
+          trading_symbol,
+          industry,
+          current_price,
+          entry_price
+        }
+      });
+      
+      console.log(`Individual stock AI analysis completed for: ${stockData.companyName}`);
+      return;
+    }
+    
+    // Handle bulk holdings analysis (original functionality)
     // Fetch holdings from Zerodha
     const response = await axios.get('https://api.kite.trade/portfolio/holdings', {
       headers: {

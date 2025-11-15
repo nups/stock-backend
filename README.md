@@ -81,7 +81,26 @@ A Node.js backend service for integrating with Zerodha Kite API to fetch stock m
    - `GET /api/zerodha/auth/login` - Initiates OAuth login with Zerodha
    - `GET /api/zerodha/auth/callback` - OAuth callback endpoint
    - `GET /api/zerodha/holdings` - Fetch user holdings (requires authentication)
-   - `GET /api/zerodha/holdings-ai` - Fetch holdings with AI recommendations
+   - `GET /api/zerodha/holdings-ai` - Fetch holdings with AI recommendations or analyze individual stocks
+     
+     **For Bulk Holdings Analysis:**
+     ```
+     GET /api/zerodha/holdings-ai?session=token&mode=quick
+     ```
+     
+     **For Individual Stock Analysis:**
+     ```
+     GET /api/zerodha/holdings-ai?session=token&symbol=RELIANCE.NS&company=Reliance Industries&trading_symbol=RELIANCE&industry=Oil & Gas&current_price=2800&entry_price=2500&stockname=Reliance Industries
+     ```
+     
+     Parameters for individual stock analysis:
+     - `symbol` - Yahoo Finance symbol (e.g., RELIANCE.NS)
+     - `company` - Company name
+     - `stockname` - Alternative company name
+     - `trading_symbol` - Trading symbol without exchange suffix
+     - `industry` - Industry sector (optional)
+     - `current_price` - Current market price
+     - `entry_price` - Entry/average price
 
    **Google OAuth 2.0:**
    - `POST /api/auth/google/token` - Exchange authorization code for access token and user profile
