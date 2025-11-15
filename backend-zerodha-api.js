@@ -16,7 +16,7 @@ const redirectUri = process.env.KITE_REDIRECT_URL;  // e.g. https://your-backend
 
 // Google Gemini AI client setup (FREE)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
 // Redis client setup
 const redisConfig = {
@@ -296,12 +296,6 @@ async function checkWhitelistMiddleware(req, res, next) {
     } else {
       // Try Google session
       console.log('🔍 Trying Google session...');
-      
-      // Check if session exists and get TTL info
-      const sessionExists = await redisClient.exists(`google_session:${sessionToken}`);
-      const sessionTTL = await redisClient.ttl(`google_session:${sessionToken}`);
-      console.log(`📊 Google session debug: exists=${sessionExists}, TTL=${sessionTTL}s`);
-      
       sessionData = await redisClient.get(`google_session:${sessionToken}`);
       if (sessionData) {
         console.log('✅ Found Google session');
@@ -313,30 +307,18 @@ async function checkWhitelistMiddleware(req, res, next) {
         if (session.expires_at) {
           const expiresAt = new Date(session.expires_at);
           const now = new Date();
-          const ageInMinutes = Math.floor((now - expiresAt) / (1000 * 60));
-          console.log(`📅 Session expires at: ${session.expires_at}, age: ${ageInMinutes}min`);
-          
           if (now > expiresAt) {
             console.log('❌ Google session expired');
             await redisClient.del(`google_session:${sessionToken}`);
             return res.status(401).json({
               error: 'Session expired',
               whitelist_enabled: true,
-              debug_info: 'Google session has expired',
-              session_age_minutes: ageInMinutes,
-              expired_at: session.expires_at
+              debug_info: 'Google session has expired'
             });
           }
         }
       } else {
         console.log('❌ No session found in Redis');
-        if (sessionTTL === -2) {
-          console.log('💀 Session key never existed or was deleted');
-        } else if (sessionTTL === -1) {
-          console.log('⏰ Session exists but has no expiration (shouldn\'t happen)');
-        } else if (sessionTTL === 0) {
-          console.log('⏰ Session just expired');
-        }
       }
     }
     
@@ -608,6 +590,16 @@ Respond ONLY with JSON:
     }
 
     console.log(`Running ${analysisMode} analysis for ${holdingsData.length} stocks with knowledge base context...`);
+    
+    // Debug Gemini setup
+    console.log('🔧 Gemini API setup check:');
+    console.log('- API Key present:', !!process.env.GEMINI_API_KEY);
+    console.log('- API Key preview:', process.env.GEMINI_API_KEY ? `${process.env.GEMINI_API_KEY.substring(0, 10)}...` : 'MISSING');
+    console.log('- Model name: gemini-pro');
+    console.log('- Model initialized:', !!model);
+    console.log('- Prompt length:', prompt.length, 'characters');
+    
+    console.log('🚀 Calling Gemini API with gemini-pro model...');
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
     
@@ -648,7 +640,22 @@ Respond ONLY with JSON:
     }
 
   } catch (error) {
-    console.error('Gemini AI error:', error);
+    console.error('🚨 Gemini AI ERROR - Full Details:');
+    console.error('Error message:', error.message);
+    console.error('Error code:', error.code);
+    console.error('Error status:', error.status);
+    console.error('Full error object:', error);
+    
+    // Check for specific Gemini API issues
+    if (error.message?.includes('API_KEY')) {
+      console.error('❌ GEMINI_API_KEY environment variable issue');
+    }
+    if (error.message?.includes('quota') || error.message?.includes('limit')) {
+      console.error('❌ Gemini API quota/rate limit exceeded');
+    }
+    if (error.message?.includes('network') || error.code === 'ENOTFOUND') {
+      console.error('❌ Network connectivity issue to Gemini API');
+    }
     
     // Enhanced fallback with variety
     return holdings.map((holding, index) => {
@@ -1177,15 +1184,11 @@ app.get('/api/stock-details/:symbol', async (req, res) => {
 
 // Google OAuth 2.0 token exchange endpoint
 app.post('/api/auth/google/token', async (req, res) => {
-  console.log('🚀 === GOOGLE OAUTH FLOW STARTED ===');
-  console.log('📥 Request body keys:', Object.keys(req.body));
-  
   try {
     const { code, redirect_uri } = req.body;
     
     // Validate required parameters
     if (!code) {
-      console.log('❌ Missing authorization code');
       return res.status(400).json({
         success: false,
         error: 'Authorization code is required'
@@ -1193,14 +1196,11 @@ app.post('/api/auth/google/token', async (req, res) => {
     }
     
     if (!redirect_uri) {
-      console.log('❌ Missing redirect URI');
       return res.status(400).json({
         success: false,
         error: 'Redirect URI is required'
       });
     }
-    
-    console.log('✅ OAuth parameters validated');
     
     // Validate environment variables
     const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -1294,17 +1294,12 @@ app.post('/api/auth/google/token', async (req, res) => {
       const userEmail = googleUser.email;
       const userId = googleUser.id;
       
-      console.log(`🔍 Checking whitelist for Google user: ${userEmail} (ID: ${userId})`);
-      
       // Check both email and user ID for whitelist
       const emailWhitelisted = await isUserWhitelisted(userEmail);
       const idWhitelisted = await isUserWhitelisted(userId);
       
-      console.log(`📋 Whitelist check results: email=${emailWhitelisted}, id=${idWhitelisted}`);
-      
       if (!emailWhitelisted && !idWhitelisted) {
-        console.log(`❌ WHITELIST BLOCK: Access denied for non-whitelisted Google user: ${userEmail} (${userId})`);
-        console.log(`🚨 SESSION WILL NOT BE STORED - user blocked at OAuth level`);
+        console.log(`Access denied for non-whitelisted Google user: ${userEmail} (${userId})`);
         return res.status(403).json({
           success: false,
           error: 'Access denied. Your account is not authorized to use this service.',
@@ -1312,14 +1307,11 @@ app.post('/api/auth/google/token', async (req, res) => {
           user_email: userEmail,
           user_id: userId,
           whitelist_enabled: true,
-          support_contact: 'Please contact support for access requests.',
-          debug_info: 'User not whitelisted - session not created'
+          support_contact: 'Please contact support for access requests.'
         });
       }
       
-      console.log(`✅ WHITELIST PASSED: Google user authenticated: ${userEmail}`);
-    } else {
-      console.log(`⚠️ Whitelist disabled - allowing all Google users`);
+      console.log(`Whitelisted Google user authenticated: ${userEmail}`);
     }
     
     // Step 4: Generate session token and store user data in Redis (optional)
@@ -1341,8 +1333,7 @@ app.post('/api/auth/google/token', async (req, res) => {
       const verifyStorage = await redisClient.get(`google_session:${sessionToken}`);
       if (verifyStorage) {
         console.log(`✅ Google session VERIFIED stored: ${userData.user_id} with session: ${sessionToken.substring(0, 8)}...`);
-        console.log(`� EXACT SESSION TOKEN GENERATED: ${sessionToken}`);
-        console.log(`�📅 Session expires at: ${sessionData.expires_at} (TTL: 3600s)`);
+        console.log(`📅 Session expires at: ${sessionData.expires_at} (TTL: 3600s)`);
       } else {
         console.error('❌ Session storage verification FAILED - session not found after storage attempt');
       }
@@ -1362,16 +1353,11 @@ app.post('/api/auth/google/token', async (req, res) => {
       timestamp: new Date().toISOString()
     };
     
-    console.log('🎉 === GOOGLE OAUTH FLOW COMPLETED SUCCESSFULLY ===');
-    console.log(`👤 User: ${userData.user_name} (${userData.email})`);
-    console.log(`🔑 Session token: ${sessionToken.substring(0, 8)}...`);
-    console.log('📤 Sending response to client');
-    
+    console.log('Google OAuth flow completed successfully for user:', userData.user_name);
     res.json(response);
     
   } catch (error) {
-    console.error('❌ === GOOGLE OAUTH FLOW FAILED ===');
-    console.error('🐛 Error details:', {
+    console.error('Google OAuth error:', {
       message: error.message,
       status: error.response?.status,
       statusText: error.response?.statusText,
@@ -1379,7 +1365,6 @@ app.post('/api/auth/google/token', async (req, res) => {
       code: error.code,
       timestamp: new Date().toISOString()
     });
-    console.error('🔍 Error stack:', error.stack);
     
     // Handle specific error cases
     let errorMessage = 'Internal server error during Google OAuth';
