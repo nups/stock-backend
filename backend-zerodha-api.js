@@ -17,8 +17,8 @@ const redirectUri = process.env.KITE_REDIRECT_URL;  // e.g. https://your-backend
 // Google Gemini AI client setup (FREE)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Google Gemini model - using gemini-pro (stable in v1beta API)
-const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+// Google Gemini model - using gemini-2.5-pro (latest and most capable)
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
 
 // Function to list models using direct HTTP call
 async function listModelsDirectly() {
@@ -156,6 +156,16 @@ async function testGeminiAPI() {
     
   } catch (error) {
     console.error('❌ Gemini API test failed:', error.message);
+    
+    // Check if it's a quota error
+    if (error.status === 429 || error.message?.includes('quota')) {
+      console.error('🚨 QUOTA EXCEEDED: Your Gemini API free tier quota is exhausted');
+      console.error('💡 Solutions:');
+      console.error('   1. Wait for quota to reset (usually 24 hours)');
+      console.error('   2. Generate a new API key at: https://aistudio.google.com/app/apikey');
+      console.error('   3. Upgrade to a paid plan');
+    }
+    
     return { success: false, error: error.message };
   }
 }
@@ -792,14 +802,20 @@ Respond ONLY with JSON:
     if (error.message?.includes('API_KEY')) {
       console.error('❌ GEMINI_API_KEY environment variable issue');
     }
-    if (error.message?.includes('quota') || error.message?.includes('limit')) {
+    if (error.status === 429 || error.message?.includes('quota') || error.message?.includes('limit') || error.message?.includes('Too Many Requests')) {
       console.error('❌ Gemini API quota/rate limit exceeded');
+      console.error('💡 AI recommendations disabled until quota resets or new API key is configured');
     }
     if (error.message?.includes('network') || error.code === 'ENOTFOUND') {
       console.error('❌ Network connectivity issue to Gemini API');
     }
     
     // Enhanced fallback with variety
+    const isQuotaError = error.status === 429 || error.message?.includes('quota') || error.message?.includes('Too Many Requests');
+    const fallbackMessage = isQuotaError 
+      ? "AI quota exceeded - awaiting reset or new API key"
+      : "AI service temporarily unavailable";
+    
     return holdings.map((holding, index) => {
       const pnl = ((holding.last_price - holding.average_price) / holding.average_price * 100);
       
@@ -807,7 +823,7 @@ Respond ONLY with JSON:
         symbol: holding.tradingsymbol,
         recommendation: pnl > 0 ? "BUY" : "HOLD",
         reason: pnl > 0 ? "Positive returns indicated" : "Conservative approach",
-        insight: "AI service temporarily unavailable",
+        insight: fallbackMessage,
         knowledge_insights: "Knowledge base not accessible"
       };
     });
