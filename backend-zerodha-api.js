@@ -83,23 +83,24 @@ async function findWorkingModel() {
   
   console.log('� Testing available models by trying each one...');
   
-  for (const modelName of modelsToTry) {
+  for (let i = 1; i < Math.min(availableModels.length, 3); i++) {
     try {
-      console.log(`🧪 Testing model: ${modelName}`);
-      const testModel = genAI.getGenerativeModel({ model: modelName });
-      const testResult = await testModel.generateContent("Hello");
+      console.log(`🧪 Testing model: ${availableModels[i]}`);
+      const testModel2 = genAI.getGenerativeModel({ model: availableModels[i] });
+      const testResult2 = await testModel2.generateContent("Hello");
       
-      console.log(`✅ SUCCESS: ${modelName} works!`);
-      return { modelName, success: true };
+      console.log(`✅ SUCCESS: ${availableModels[i]} works!`);
+      return { modelName: availableModels[i], success: true, allAvailable: availableModels };
       
-    } catch (error) {
-      console.log(`❌ FAILED: ${modelName} - ${error.message}`);
+    } catch (innerError) {
+      console.log(`❌ FAILED: ${availableModels[i]} - ${innerError.message}`);
       continue;
     }
   }
   
-  console.error('❌ No working models found from the test list');
-  return { modelName: null, success: false };
+  console.error('❌ No working models found from the available list');
+  return { modelName: null, success: false, allAvailable: availableModels };
+  }
 }
 
 // Test function to verify Gemini API is working
