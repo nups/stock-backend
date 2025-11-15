@@ -20,17 +20,66 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Google Gemini model - using gemini-pro (stable in v1beta API)
 const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
+// Function to list models using direct HTTP call
+async function listModelsDirectly() {
+  try {
+    console.log('🔍 Calling Google API directly to list models...');
+    const apiKey = process.env.GEMINI_API_KEY;
+    const response = await axios.get(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    
+    console.log('📋 Available models from direct API call:');
+    const models = response.data.models || [];
+    
+    const supportedModels = [];
+    for (const model of models) {
+      const modelId = model.name.replace('models/', '');
+      console.log(`- ${modelId} (${model.displayName || 'No display name'})`);
+      console.log(`  Supported methods: ${model.supportedGenerationMethods?.join(', ') || 'unknown'}`);
+      
+      if (model.supportedGenerationMethods?.includes('generateContent')) {
+        supportedModels.push(modelId);
+      }
+    }
+    
+    console.log('\n✅ Models that support generateContent:');
+    supportedModels.forEach(model => console.log(`- ${model}`));
+    
+    return supportedModels;
+    
+  } catch (error) {
+    console.error('❌ Failed to list models directly:', error.message);
+    if (error.response) {
+      console.error('Response status:', error.response.status);
+      console.error('Response data:', error.response.data);
+    }
+    return [];
+  }
+}
+
 // Function to test available models by trying them
 async function findWorkingModel() {
-  // Known models to try (based on Google's documentation for v1beta API)
-  const modelsToTry = [
-    'gemini-pro',
-    'gemini-1.0-pro',
-    'gemini-1.0-pro-001',
-    'gemini-1.0-pro-latest',
-    'text-bison-001',
-    'text-bison@001'
-  ];
+  console.log('🔍 First, let\'s see what models are actually available...');
+  
+  // Get the real list of models from Google's API
+  const availableModels = await listModelsDirectly();
+  
+  if (availableModels.length === 0) {
+    console.error('❌ No models available that support generateContent');
+    return { modelName: null, success: false };
+  }
+  
+  // Test the first available model
+  console.log(`🧪 Testing first available model: ${availableModels[0]}`);
+  
+  try {
+    const testModel = genAI.getGenerativeModel({ model: availableModels[0] });
+    const testResult = await testModel.generateContent("Hello");
+    
+    console.log(`✅ SUCCESS: ${availableModels[0]} works!`);
+    return { modelName: availableModels[0], success: true, allAvailable: availableModels };
+    
+  } catch (error) {
+    console.log(`❌ FAILED: ${availableModels[0]} - ${error.message}`);
   
   console.log('� Testing available models by trying each one...');
   
@@ -58,24 +107,51 @@ async function testGeminiAPI() {
   try {
     console.log('🧪 Testing Gemini API connection...');
     
-    // Find a working model by testing each one
-    const result = await findWorkingModel();
+    // First, let's call the models API directly to see what's available
+    console.log('🔍 Calling Google API directly to list models...');
+    const apiKey = process.env.GEMINI_API_KEY;
+    const modelsResponse = await axios.get(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
     
-    if (!result.success) {
-      console.error('❌ No working models found');
-      return { success: false, error: 'No working models found' };
+    console.log('📋 Available models from direct API call:');
+    const models = modelsResponse.data.models || [];
+    
+    if (models.length === 0) {
+      console.error('❌ No models available at all!');
+      return { success: false, error: 'No models available' };
     }
     
-    // Test the working model with a more comprehensive prompt
-    console.log(`🔄 Running full test with working model: ${result.modelName}`);
+    console.log(`Found ${models.length} total models:`);
+    const supportedModels = [];
+    for (const model of models) {
+      const modelId = model.name.replace('models/', '');
+      console.log(`- ${modelId} (${model.displayName || 'No display name'})`);
+      console.log(`  Supported methods: ${model.supportedGenerationMethods?.join(', ') || 'unknown'}`);
+      
+      if (model.supportedGenerationMethods?.includes('generateContent')) {
+        supportedModels.push(modelId);
+      }
+    }
     
-    const testModel = genAI.getGenerativeModel({ model: result.modelName });
-    const testResult = await testModel.generateContent("Say 'Hello, Gemini API is working!' in exactly those words.");
+    console.log('\n✅ Models that support generateContent:');
+    supportedModels.forEach(model => console.log(`- ${model}`));
+    
+    if (supportedModels.length === 0) {
+      console.error('❌ No models support generateContent');
+      return { success: false, error: 'No models support generateContent' };
+    }
+    
+    // Try the first supported model
+    const workingModel = supportedModels[0];
+    console.log(`🧪 Testing first supported model: ${workingModel}`);
+    
+    const testModel = genAI.getGenerativeModel({ model: workingModel });
+    const testResult = await testModel.generateContent("Hello");
     const response = testResult.response.text();
     
-    console.log('✅ Gemini API test successful with model:', result.modelName);
+    console.log(`✅ SUCCESS: ${workingModel} works!`);
     console.log('Response:', response);
-    return { success: true, workingModel: result.modelName };
+    
+    return { success: true, workingModel, allSupportedModels: supportedModels };
     
   } catch (error) {
     console.error('❌ Gemini API test failed:', error.message);
