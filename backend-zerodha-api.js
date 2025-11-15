@@ -275,49 +275,81 @@ async function checkWhitelistMiddleware(req, res, next) {
     if (!sessionToken) {
       return res.status(401).json({
         error: 'Authentication required',
-        whitelist_enabled: true
+        whitelist_enabled: true,
+        debug_info: 'No session token provided'
       });
     }
+    
+    console.log(`🔍 Checking session token: ${sessionToken.substring(0, 8)}...`);
     
     // Get session data from Redis (try both Zerodha and Google sessions)
     let sessionData = await redisClient.get(`session:${sessionToken}`);
     let userIdentifier = null;
+    let sessionType = null;
     
     if (sessionData) {
       // Zerodha session
+      console.log('✅ Found Zerodha session');
       const session = JSON.parse(sessionData);
       userIdentifier = session.user_id;
+      sessionType = 'zerodha';
     } else {
       // Try Google session
+      console.log('🔍 Trying Google session...');
       sessionData = await redisClient.get(`google_session:${sessionToken}`);
       if (sessionData) {
+        console.log('✅ Found Google session');
         const session = JSON.parse(sessionData);
         userIdentifier = session.user_data?.email || session.user_data?.user_id;
+        sessionType = 'google';
+        
+        // Check if Google session has expired
+        if (session.expires_at) {
+          const expiresAt = new Date(session.expires_at);
+          const now = new Date();
+          if (now > expiresAt) {
+            console.log('❌ Google session expired');
+            await redisClient.del(`google_session:${sessionToken}`);
+            return res.status(401).json({
+              error: 'Session expired',
+              whitelist_enabled: true,
+              debug_info: 'Google session has expired'
+            });
+          }
+        }
+      } else {
+        console.log('❌ No session found in Redis');
       }
     }
     
     if (!userIdentifier) {
       return res.status(401).json({
         error: 'Invalid or expired session',
-        whitelist_enabled: true
+        whitelist_enabled: true,
+        debug_info: `No valid session found for token: ${sessionToken.substring(0, 8)}...`
       });
     }
+    
+    console.log(`👤 User identified: ${userIdentifier} (${sessionType} session)`);
     
     // Check if user is whitelisted
     const isWhitelisted = await isUserWhitelisted(userIdentifier);
     
     if (!isWhitelisted) {
-      console.log(`Access denied for non-whitelisted user: ${userIdentifier}`);
+      console.log(`❌ Access denied for non-whitelisted user: ${userIdentifier}`);
       return res.status(403).json({
         error: 'Access denied. Your account is not authorized to use this service.',
         message: 'Please contact support to request access.',
         user_id: userIdentifier,
-        whitelist_enabled: true
+        whitelist_enabled: true,
+        debug_info: `User ${userIdentifier} is not whitelisted`
       });
     }
     
+    console.log(`✅ User ${userIdentifier} is whitelisted - access granted`);
+    
     // Add user info to request for downstream use
-    req.user = { identifier: userIdentifier, whitelisted: true };
+    req.user = { identifier: userIdentifier, whitelisted: true, session_type: sessionType };
     next();
     
   } catch (error) {
@@ -1447,6 +1479,68 @@ app.post('/api/auth/logout', async (req, res) => {
       message: 'Logout completed',
       error: error.message,
       timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Debug endpoint to check session status (development only)
+app.get('/api/debug/session', async (req, res) => {
+  try {
+    const { session_token } = req.query;
+    
+    if (!session_token) {
+      return res.status(400).json({
+        error: 'session_token query parameter is required'
+      });
+    }
+    
+    console.log(`🔍 Debug: Checking session ${session_token.substring(0, 8)}...`);
+    
+    // Check both session types
+    const zerodhaSession = await redisClient.get(`session:${session_token}`);
+    const googleSession = await redisClient.get(`google_session:${session_token}`);
+    
+    const result = {
+      session_token: session_token.substring(0, 8) + '...',
+      zerodha_session: {
+        exists: !!zerodhaSession,
+        data: zerodhaSession ? JSON.parse(zerodhaSession) : null
+      },
+      google_session: {
+        exists: !!googleSession,
+        data: googleSession ? JSON.parse(googleSession) : null
+      },
+      whitelist_enabled: ENABLE_WHITELIST,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Check whitelist status if session exists
+    if (zerodhaSession) {
+      const session = JSON.parse(zerodhaSession);
+      result.zerodha_session.whitelisted = await isUserWhitelisted(session.user_id);
+    }
+    
+    if (googleSession) {
+      const session = JSON.parse(googleSession);
+      const userIdentifier = session.user_data?.email || session.user_data?.user_id;
+      result.google_session.whitelisted = await isUserWhitelisted(userIdentifier);
+      
+      // Check expiration
+      if (session.expires_at) {
+        const expiresAt = new Date(session.expires_at);
+        const now = new Date();
+        result.google_session.expired = now > expiresAt;
+        result.google_session.expires_at = session.expires_at;
+      }
+    }
+    
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Debug session error:', error);
+    res.status(500).json({
+      error: 'Debug session failed',
+      message: error.message
     });
   }
 });
