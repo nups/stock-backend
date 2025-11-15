@@ -6,6 +6,7 @@ const qs = require('qs'); // npm package to stringify form data
 const crypto = require('crypto');
 const redis = require('redis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const yahooFinance = require('yahoo-finance2').default;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -228,6 +229,157 @@ const SUPER_ADMIN_MODE = process.env.SUPER_ADMIN_MODE === 'true'; // Bypass whit
  * @param {string} query - search string (use '*' or '' for match-all)
  * @param {number} top - max number of results to return
  */
+// ============================================================================
+// STOCK DATA ENRICHMENT FUNCTIONS
+// ============================================================================
+
+/**
+ * Fetch fundamental data from Yahoo Finance
+ * @param {string} symbol - Stock symbol (e.g., "RELIANCE.NS")
+ * @returns {Object} Fundamental data including ratios, financials, etc.
+ */
+async function fetchFundamentalData(symbol) {
+  try {
+    console.log(`📊 Fetching fundamental data for ${symbol}...`);
+    
+    // Add .NS suffix for NSE stocks if not present
+    const yahooSymbol = symbol.includes('.') ? symbol : `${symbol}.NS`;
+    
+    // Fetch quote summary with all available modules
+    const quote = await yahooFinance.quoteSummary(yahooSymbol, {
+      modules: ['summaryDetail', 'financialData', 'defaultKeyStatistics', 'summaryProfile']
+    });
+    
+    const fundamentals = {
+      marketCap: quote.summaryDetail?.marketCap || null,
+      peRatio: quote.summaryDetail?.trailingPE || null,
+      pbRatio: quote.defaultKeyStatistics?.priceToBook || null,
+      dividendYield: quote.summaryDetail?.dividendYield || null,
+      roe: quote.financialData?.returnOnEquity || null,
+      debtToEquity: quote.financialData?.debtToEquity || null,
+      currentRatio: quote.financialData?.currentRatio || null,
+      profitMargin: quote.financialData?.profitMargins || null,
+      revenueGrowth: quote.financialData?.revenueGrowth || null,
+      earningsGrowth: quote.financialData?.earningsGrowth || null,
+      targetMeanPrice: quote.financialData?.targetMeanPrice || null,
+      recommendationKey: quote.financialData?.recommendationKey || null,
+      fiftyTwoWeekHigh: quote.summaryDetail?.fiftyTwoWeekHigh || null,
+      fiftyTwoWeekLow: quote.summaryDetail?.fiftyTwoWeekLow || null,
+      sector: quote.summaryProfile?.sector || null,
+      industry: quote.summaryProfile?.industry || null,
+      beta: quote.summaryDetail?.beta || null
+    };
+    
+    console.log(`✅ Fundamental data fetched for ${symbol}`);
+    return fundamentals;
+    
+  } catch (error) {
+    console.error(`❌ Error fetching fundamental data for ${symbol}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Fetch technical indicators from Yahoo Finance
+ * @param {string} symbol - Stock symbol
+ * @returns {Object} Technical indicators
+ */
+async function fetchTechnicalData(symbol) {
+  try {
+    console.log(`📈 Fetching technical data for ${symbol}...`);
+    
+    const yahooSymbol = symbol.includes('.') ? symbol : `${symbol}.NS`;
+    
+    // Fetch historical data for last 3 months
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setMonth(startDate.getMonth() - 3);
+    
+    const history = await yahooFinance.historical(yahooSymbol, {
+      period1: startDate,
+      period2: endDate,
+      interval: '1wk' // Weekly data
+    });
+    
+    if (!history || history.length === 0) {
+      return null;
+    }
+    
+    // Calculate basic technical indicators
+    const prices = history.map(d => d.close);
+    const volumes = history.map(d => d.volume);
+    const latestPrice = prices[prices.length - 1];
+    
+    // Simple Moving Averages
+    const sma20 = prices.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, prices.length);
+    const sma50 = prices.slice(-50).reduce((a, b) => a + b, 0) / Math.min(50, prices.length);
+    
+    // Price momentum
+    const priceChange1w = ((prices[prices.length - 1] - prices[prices.length - 2]) / prices[prices.length - 2] * 100);
+    const priceChange4w = ((prices[prices.length - 1] - prices[prices.length - 5]) / prices[prices.length - 5] * 100);
+    
+    // Volume trend
+    const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+    const latestVolume = volumes[volumes.length - 1];
+    const volumeTrend = ((latestVolume - avgVolume) / avgVolume * 100);
+    
+    const technical = {
+      sma20,
+      sma50,
+      priceAboveSMA20: latestPrice > sma20,
+      priceAboveSMA50: latestPrice > sma50,
+      priceChange1Week: priceChange1w,
+      priceChange4Week: priceChange4w,
+      volumeTrend,
+      avgVolume,
+      trend: latestPrice > sma20 && latestPrice > sma50 ? 'UPTREND' : 
+             latestPrice < sma20 && latestPrice < sma50 ? 'DOWNTREND' : 'NEUTRAL'
+    };
+    
+    console.log(`✅ Technical data fetched for ${symbol}`);
+    return technical;
+    
+  } catch (error) {
+    console.error(`❌ Error fetching technical data for ${symbol}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Enrich holdings data with fundamental and technical information
+ * @param {Array} holdings - Array of holdings from Zerodha
+ * @returns {Array} Enriched holdings data
+ */
+async function enrichHoldingsData(holdings) {
+  console.log(`🔄 Enriching ${holdings.length} holdings with market data...`);
+  
+  const enrichedHoldings = await Promise.all(
+    holdings.map(async (holding) => {
+      const symbol = holding.tradingsymbol;
+      
+      // Fetch both fundamental and technical data in parallel
+      const [fundamentals, technicals] = await Promise.all([
+        fetchFundamentalData(symbol),
+        fetchTechnicalData(symbol)
+      ]);
+      
+      return {
+        ...holding,
+        fundamentals,
+        technicals,
+        enriched: true
+      };
+    })
+  );
+  
+  console.log(`✅ Holdings enrichment complete`);
+  return enrichedHoldings;
+}
+
+// ============================================================================
+// AZURE COGNITIVE SEARCH
+// ============================================================================
+
 async function azureSearch(query, top = 10) {
   const url = `${AZURE_SEARCH_ENDPOINT}/indexes/${encodeURIComponent(AZURE_SEARCH_INDEX)}/docs/search?api-version=${AZURE_SEARCH_API_VERSION}`;
   const body = {
@@ -594,10 +746,16 @@ async function checkAdminMiddleware(req, res, next) {
 // Hybrid AI Analysis Function - Quick and Detailed modes with Knowledge Base Context
 async function getAIRecommendations(holdings, analysisMode = 'quick') {
   try {
-    const holdingsData = holdings.map(holding => {
+    // First, enrich holdings with real-time market data
+    console.log('🔄 Enriching holdings with fundamental and technical data...');
+    const enrichedHoldings = await enrichHoldingsData(holdings);
+    
+    const holdingsData = enrichedHoldings.map(holding => {
       const pnl = ((holding.last_price - holding.average_price) * holding.quantity);
       const pnlPercent = ((holding.last_price - holding.average_price) / holding.average_price * 100).toFixed(2);
-      return {
+      
+      // Build enriched data object
+      const baseData = {
         symbol: holding.tradingsymbol,
         quantity: holding.quantity,
         avg_price: holding.average_price,
@@ -606,6 +764,45 @@ async function getAIRecommendations(holdings, analysisMode = 'quick') {
         pnl_percent: pnlPercent,
         current_value: (holding.last_price * holding.quantity).toFixed(2)
       };
+      
+      // Add fundamental data if available
+      if (holding.fundamentals) {
+        baseData.fundamentals = {
+          marketCap: holding.fundamentals.marketCap,
+          peRatio: holding.fundamentals.peRatio,
+          pbRatio: holding.fundamentals.pbRatio,
+          dividendYield: holding.fundamentals.dividendYield,
+          roe: holding.fundamentals.roe,
+          debtToEquity: holding.fundamentals.debtToEquity,
+          currentRatio: holding.fundamentals.currentRatio,
+          profitMargin: holding.fundamentals.profitMargin,
+          revenueGrowth: holding.fundamentals.revenueGrowth,
+          earningsGrowth: holding.fundamentals.earningsGrowth,
+          sector: holding.fundamentals.sector,
+          industry: holding.fundamentals.industry,
+          beta: holding.fundamentals.beta,
+          fiftyTwoWeekHigh: holding.fundamentals.fiftyTwoWeekHigh,
+          fiftyTwoWeekLow: holding.fundamentals.fiftyTwoWeekLow,
+          targetMeanPrice: holding.fundamentals.targetMeanPrice,
+          recommendationKey: holding.fundamentals.recommendationKey
+        };
+      }
+      
+      // Add technical data if available
+      if (holding.technicals) {
+        baseData.technicals = {
+          sma20: holding.technicals.sma20,
+          sma50: holding.technicals.sma50,
+          priceAboveSMA20: holding.technicals.priceAboveSMA20,
+          priceAboveSMA50: holding.technicals.priceAboveSMA50,
+          priceChange1Week: holding.technicals.priceChange1Week,
+          priceChange4Week: holding.technicals.priceChange4Week,
+          volumeTrend: holding.technicals.volumeTrend,
+          trend: holding.technicals.trend
+        };
+      }
+      
+      return baseData;
     });
 
     // Get relevant context from knowledge base
@@ -636,69 +833,163 @@ async function getAIRecommendations(holdings, analysisMode = 'quick') {
     
     if (analysisMode === 'detailed') {
       // Comprehensive equity research prompt with knowledge base context
-      prompt = `You are an expert equity research analyst and technical market strategist at a leading quant-driven investment firm. Provide comprehensive analysis for each stock using both market knowledge and the provided knowledge base context.
+      prompt = `You are an expert equity research analyst and technical market strategist at a leading quant-driven investment firm. Your task is to deliver a professional, forward-looking investment recommendation by rigorously scoring both fundamental and technical parameters. Use only the most recent data (Q4FY25 or TTM), latest investor communications, and sector-appropriate valuation frameworks.
 
 **Knowledge Base Context:**
 ${knowledgeContext || 'No specific knowledge base context available for these stocks.'}
 
-**Analysis Framework:**
-1. **Fundamental Analysis (1-5 score)**:
-   - Business Model & Unit Economics
-   - Growth Drivers & Catalysts  
-   - Industry Positioning & Competitive Edge
-   - Valuation Assessment
-   - Financial Health & Quality
-   - Risk Assessment
+**For each checklist point, assign a clear score on a 1–5 scale (1=Very Weak/Negative, 5=Very Strong/Positive), and briefly justify each score.**
 
-2. **Technical Analysis (1-5 score)**:
-   - Price Momentum & Trend Analysis
-   - Volume-Price Relationship
-   - Support & Resistance Levels
-   - Relative Strength vs Market
-   - Entry/Exit Signals
+### 1. FUNDAMENTAL ANALYSIS CHECKLIST
 
-3. **Investment Thesis**:
-   - Bull/Base/Bear Case Scenarios
-   - Key Catalysts & Risk Factors
-   - Target Price & Time Horizon
+#### 1. Company Snapshot (Score 1-5)
+- Brief description, revenue breakdown by segment/geography/product
+- B2B/B2C/hybrid, key customers, distribution reach
+- Promoter group/ownership structure
 
-**Scoring Scale:**
-- 5: Very Strong/Positive (Strong BUY)
-- 4: Strong/Positive (BUY) 
-- 3: Neutral (HOLD)
-- 2: Weak/Negative (SELL consideration)
-- 1: Very Weak/Negative (Strong SELL)
+#### 2. Business Model & Unit Economics (Score 1-5)
+- How the company earns money, industry-specific KPIs
+- Gross margin, working capital cycle, fixed cost leverage
 
-**Analysis Rules:**
-- Be decisive with recommendations (40-60% BUY, include SELL where justified)
-- Consider P&L performance, quality metrics, and momentum
-- Factor in Indian market context and sector dynamics
-- Use knowledge base insights when available
+#### 3. Growth Drivers & Catalysts (Score 1-5)
+- Near-term/structural triggers, management guidance, credible forward triggers
 
-Holdings Data:
+#### 4. Industry Positioning & Competitive Edge (Score 1-5)
+- Market/sector standing, volume/margin leader, peer benchmarks
+- Moats: distribution, brand, cost, contracts, R&D
+
+#### 5. Valuation - Sector-Relevant (Score 1-5)
+- Use relevant metrics (EV/EBITDA, P/E, Price/AUM, etc.)
+- Current vs 5-year avg and peers, scope for re-rating
+
+#### 6. Financial Health Summary (Score 1-5)
+- Revenue, EBITDA, PAT CAGR (3–5 yrs); margin/WC trends
+- Capex vs free cash, ROCE vs WACC, debt, D/E, cash flows
+
+#### 7. Risk Assessment (Score 1-5)
+- Sector & company risks: concentration, volatility, regulatory, governance
+
+#### 8. Investment Checklist Quality (Score 1-5)
+- Clear growth driver, margin tailwind, capital efficiency, clean balance sheet
+- Attractive valuation, credible management, no red flags, entry barriers/moat
+
+#### 9. Bull/Base/Bear Scenario Analysis (Score 1-5)
+- Outline assumptions, value range, and implied upside/downside
+
+#### 10. ESG & Sustainability (Score 1-5)
+- Environmental, Social, and Governance factors
+- Impact on long-term sustainability and regulatory compliance
+
+### 2. TECHNICAL ANALYSIS CHECKLIST (Weekly Chart Focus)
+
+#### 1. Dow Theory & Primary Trend (Score 1-5)
+- Is stock in primary/secondary uptrend or downtrend?
+
+#### 2. Stage Analysis - Stan Weinstein (Score 1-5)
+- Is stock entering Stage 2 (uptrend) with rising relative strength?
+- Is the 30 WEMA (weekly EMA) rising?
+
+#### 3. Price-Volume Action (Score 1-5)
+- Is volume rising with price? Clear accumulation/distribution signal?
+
+#### 4. Relative Strength vs Indices (Score 1-5)
+- Is RS vs Nifty 50, Nifty 500, and sector index rising/falling?
+
+#### 5. Support & Resistance Levels (Score 1-5)
+- Key weekly resistance & support levels identified
+
+#### 6. Entry Pointers & Patterns (Score 1-5)
+- Patterns (ascending triangle, cup & handle, base breakout)
+- Continuation or pullback setups, VSTOP status
+
+#### 7. Stop Loss/Exit Strategy (Score 1-5)
+- Where should stop-loss be kept? Exit signals: breakdowns, RS loss, Stage 3 distribution
+
+### 3. MARKET CONTEXT & PEER ANALYSIS
+
+#### Peer Comparison (Score 1-5)
+- Compare with 3-5 main peers on: Market cap, P/E, P/B, EV/EBITDA, ROE, Revenue CAGR, Debt/Equity
+
+#### Sentiment & News Analysis (Score 1-5)
+- Latest news/sentiment (earnings surprises, regulatory actions, management changes)
+
+**Holdings Data with Real-Time Market Data:**
+Each holding includes:
+- **Basic Info**: symbol, quantity, avg_price, current_price, P&L
+- **Fundamentals**: PE Ratio, PB Ratio, ROE, Debt/Equity, Profit Margin, Revenue Growth, Earnings Growth, Dividend Yield, Market Cap, Sector, Industry, Beta, 52-week High/Low, Analyst Target Price
+- **Technicals**: SMA20, SMA50, Price vs SMAs, 1-week & 4-week price changes, Volume trends, Overall trend (UPTREND/DOWNTREND/NEUTRAL)
+
 ${JSON.stringify(holdingsData, null, 2)}
 
-Respond with detailed JSON:
+**Important**: Use the provided fundamental and technical data from Yahoo Finance to support your analysis. This is real-time market data that should inform your scoring decisions.
+
+**Response Format - Return JSON with this exact structure:**
 [
   {
     "symbol": "STOCK_SYMBOL",
-    "recommendation": "BUY",
-    "fundamental_score": 4,
-    "technical_score": 4,
-    "overall_score": 4.0,
-    "business_model": "Brief business model assessment",
-    "growth_drivers": "Key growth catalysts",
-    "competitive_edge": "Competitive advantages",
-    "valuation_view": "Valuation assessment",
-    "technical_view": "Technical momentum analysis",
-    "bull_case": "Bull case scenario",
-    "bear_case": "Bear case risks",
-    "target_price": "₹XXX (upside/downside %)",
-    "key_risks": "Primary risk factors",
-    "investment_thesis": "Overall investment rationale",
-    "knowledge_insights": "Insights from knowledge base (if any)"
+    "company_name": "Full Company Name",
+    "recommendation": "BUY|SELL|HOLD",
+    
+    "fundamental_scores": {
+      "company_snapshot": { "score": 4, "justification": "2-3 line explanation" },
+      "business_model": { "score": 4, "justification": "2-3 line explanation" },
+      "growth_drivers": { "score": 4, "justification": "2-3 line explanation" },
+      "industry_positioning": { "score": 4, "justification": "2-3 line explanation" },
+      "valuation": { "score": 3, "justification": "2-3 line explanation" },
+      "financial_health": { "score": 4, "justification": "2-3 line explanation" },
+      "risk_assessment": { "score": 3, "justification": "2-3 line explanation" },
+      "investment_checklist": { "score": 4, "justification": "2-3 line explanation" },
+      "scenario_analysis": { "score": 4, "justification": "2-3 line explanation" },
+      "esg_sustainability": { "score": 3, "justification": "2-3 line explanation" },
+      "subtotal": 37
+    },
+    
+    "technical_scores": {
+      "dow_theory": { "score": 4, "justification": "2-3 line explanation" },
+      "stage_analysis": { "score": 4, "justification": "2-3 line explanation" },
+      "price_volume": { "score": 4, "justification": "2-3 line explanation" },
+      "relative_strength": { "score": 3, "justification": "2-3 line explanation" },
+      "support_resistance": { "score": 4, "justification": "2-3 line explanation" },
+      "entry_pointers": { "score": 4, "justification": "2-3 line explanation" },
+      "stop_loss_exit": { "score": 3, "justification": "2-3 line explanation" },
+      "subtotal": 26
+    },
+    
+    "market_context_scores": {
+      "peer_comparison": { "score": 4, "justification": "2-3 line explanation" },
+      "sentiment_news": { "score": 3, "justification": "2-3 line explanation" },
+      "subtotal": 7
+    },
+    
+    "final_analysis": {
+      "fundamental_weighted": 22.2,
+      "technical_weighted": 9.1,
+      "context_weighted": 0.35,
+      "final_score": 4.15,
+      "recommendation_basis": "Strong Buy (4.25-5.0) | Buy (3.5-4.24) | Hold (2.75-3.49) | Sell (<2.75)"
+    },
+    
+    "price_targets": {
+      "bull_case": "₹XXX (+Y% upside)",
+      "base_case": "₹XXX (+/-Y%)",
+      "bear_case": "₹XXX (-Y% downside)",
+      "stop_loss": "₹XXX"
+    },
+    
+    "investment_thesis": "Overall 3-5 line investment rationale",
+    "key_catalysts": "Primary growth triggers and rerating opportunities",
+    "key_risks": "Main risk factors to monitor",
+    "monitoring_points": "Key metrics to track for reassessment"
   }
-]`;
+]
+
+**Analysis Rules:**
+- Use Q4FY25/TTM data preferentially; clearly mark if FY24 data used
+- Apply sector-appropriate valuation metrics
+- Be decisive with recommendations
+- Factor in Indian market context and sector dynamics
+- Use knowledge base insights when available
+- Provide actionable price targets and stop-loss levels`;
     } else {
       // Quick portfolio analysis prompt with knowledge base context
       prompt = `You are an expert equity research analyst. Provide quick but decisive portfolio analysis for these Indian stock holdings using both market knowledge and the provided knowledge base context.
@@ -1034,8 +1325,12 @@ app.get('/api/zerodha/holdings-ai', checkWhitelistMiddleware, async (req, res) =
         user_session_type: req.user?.session_type || 'unknown'
       });
       
+      // Enrich individual stock data with market data
+      console.log('🔄 Enriching individual stock with real-time data...');
+      const enrichedStock = await enrichHoldingsData([stockData]);
+      
       // Get AI recommendation for the individual stock
-      const aiRecommendations = await getAIRecommendations([stockData], analysisMode);
+      const aiRecommendations = await getAIRecommendations(enrichedStock, analysisMode);
       
       const recommendation = aiRecommendations[0] || {
         symbol: stockData.tradingsymbol,
