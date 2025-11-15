@@ -326,7 +326,17 @@ async function checkWhitelistMiddleware(req, res, next) {
       return res.status(401).json({
         error: 'Invalid or expired session',
         whitelist_enabled: true,
-        debug_info: `No valid session found for token: ${sessionToken.substring(0, 8)}...`
+        debug_info: `No valid session found for token: ${sessionToken.substring(0, 8)}...`,
+        troubleshooting: {
+          message: 'Your session may have expired or was not properly stored',
+          solutions: [
+            'Google sessions expire after 1 hour - try logging in again',
+            'Check if you completed the full OAuth flow',
+            'Verify Redis connection is working'
+          ],
+          debug_endpoint: `/api/debug/session?session_token=${sessionToken}`,
+          relogin_needed: true
+        }
       });
     }
     
@@ -1284,16 +1294,27 @@ app.post('/api/auth/google/token', async (req, res) => {
     
     try {
       // Store Google user session in Redis (expires in 1 hour)
-      await redisClient.setEx(`google_session:${sessionToken}`, 3600, JSON.stringify({
+      const sessionData = {
         access_token,
         refresh_token,
         user_data: userData,
-        expires_at: new Date(Date.now() + (expires_in * 1000)).toISOString()
-      }));
+        expires_at: new Date(Date.now() + (expires_in * 1000)).toISOString(),
+        created_at: new Date().toISOString()
+      };
       
-      console.log(`Google user session stored: ${userData.user_id} with session: ${sessionToken}`);
+      await redisClient.setEx(`google_session:${sessionToken}`, 3600, JSON.stringify(sessionData));
+      
+      // Verify storage worked
+      const verifyStorage = await redisClient.get(`google_session:${sessionToken}`);
+      if (verifyStorage) {
+        console.log(`✅ Google session VERIFIED stored: ${userData.user_id} with session: ${sessionToken.substring(0, 8)}...`);
+        console.log(`📅 Session expires at: ${sessionData.expires_at} (TTL: 3600s)`);
+      } else {
+        console.error('❌ Session storage verification FAILED - session not found after storage attempt');
+      }
     } catch (redisError) {
-      console.error('Redis storage failed (non-critical):', redisError.message);
+      console.error('❌ Redis storage failed (CRITICAL):', redisError.message);
+      console.error('🚨 User will get 401 errors - session not persisted!');
       // Continue without Redis storage
     }
     
