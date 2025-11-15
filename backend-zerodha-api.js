@@ -20,17 +20,61 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Google Gemini model - using gemini-pro (stable in v1beta API)
 const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
+// Function to list available models
+async function listAvailableModels() {
+  try {
+    console.log('🔍 Fetching list of available models...');
+    const models = await genAI.listModels();
+    console.log('📋 Available models:');
+    
+    const supportedModels = [];
+    for (const model of models) {
+      console.log(`- ${model.name} (${model.displayName})`);
+      console.log(`  Supported methods: ${model.supportedGenerationMethods?.join(', ') || 'unknown'}`);
+      
+      if (model.supportedGenerationMethods?.includes('generateContent')) {
+        supportedModels.push(model.name.replace('models/', ''));
+      }
+    }
+    
+    console.log('\n✅ Models that support generateContent:');
+    supportedModels.forEach(model => console.log(`- ${model}`));
+    
+    return supportedModels;
+  } catch (error) {
+    console.error('❌ Failed to list models:', error.message);
+    return [];
+  }
+}
+
 // Test function to verify Gemini API is working
 async function testGeminiAPI() {
   try {
     console.log('🧪 Testing Gemini API connection...');
-    const testResult = await model.generateContent("Say 'Hello, Gemini API is working!' in exactly those words.");
+    
+    // First, list available models
+    const availableModels = await listAvailableModels();
+    
+    if (availableModels.length === 0) {
+      console.error('❌ No models available that support generateContent');
+      return false;
+    }
+    
+    // Try the first available model
+    const workingModel = availableModels[0];
+    console.log(`🔄 Testing with first available model: ${workingModel}`);
+    
+    const testModel = genAI.getGenerativeModel({ model: workingModel });
+    const testResult = await testModel.generateContent("Say 'Hello, Gemini API is working!' in exactly those words.");
     const response = testResult.response.text();
-    console.log('✅ Gemini API test successful:', response);
-    return true;
+    
+    console.log('✅ Gemini API test successful with model:', workingModel);
+    console.log('Response:', response);
+    return { success: true, workingModel, availableModels };
+    
   } catch (error) {
     console.error('❌ Gemini API test failed:', error.message);
-    return false;
+    return { success: false, error: error.message };
   }
 }
 
@@ -2031,20 +2075,21 @@ app.get('/api/whitelist-info', async (req, res) => {
 app.get('/api/test/gemini', async (req, res) => {
   try {
     console.log('🧪 Gemini API test endpoint called');
-    const isWorking = await testGeminiAPI();
+    const result = await testGeminiAPI();
     
-    if (isWorking) {
+    if (result.success) {
       res.json({
         status: 'success',
         message: 'Gemini API is working correctly',
-        model: 'gemini-pro',
+        workingModel: result.workingModel,
+        availableModels: result.availableModels,
         timestamp: new Date().toISOString()
       });
     } else {
       res.status(500).json({
         status: 'error',
         message: 'Gemini API test failed',
-        model: 'gemini-pro',
+        error: result.error,
         timestamp: new Date().toISOString()
       });
     }
