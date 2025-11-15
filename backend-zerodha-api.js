@@ -816,19 +816,10 @@ app.get('/api/zerodha/holdings-ai', checkWhitelistMiddleware, async (req, res) =
   }
   
   try {
-    // Get session data from Redis
-    const sessionData = await redisClient.get(`session:${sessionToken}`);
-    console.log('Session data:', sessionData ? 'Found' : 'Not found');
-    
-    if (!sessionData) {
-      return res.status(401).json({ error: 'Session expired or invalid. Please re-authenticate.' });
-    }
-    
-    const { access_token: accessToken, user_id: userId } = JSON.parse(sessionData);
-    
-    // Handle individual stock analysis
+    // Handle individual stock analysis - doesn't need Zerodha API
     if (symbol || company || stockname) {
       console.log('Fetching AI recommendation for:', company || stockname || symbol);
+      console.log(`✅ Individual stock analysis - using authenticated session (${req.user?.session_type})`);
       
       // Create a mock stock object for individual analysis
       const stockData = {
@@ -846,7 +837,8 @@ app.get('/api/zerodha/holdings-ai', checkWhitelistMiddleware, async (req, res) =
         symbol: stockData.yahooSymbol,
         company: stockData.companyName,
         current_price: stockData.last_price,
-        entry_price: stockData.average_price
+        entry_price: stockData.average_price,
+        user_session_type: req.user?.session_type || 'unknown'
       });
       
       // Get AI recommendation for the individual stock
@@ -870,6 +862,10 @@ app.get('/api/zerodha/holdings-ai', checkWhitelistMiddleware, async (req, res) =
         analysis_mode: analysisMode,
         ai_analysis_status: aiRecommendations.length > 0 ? 'success' : 'partial',
         analysis_timestamp: new Date().toISOString(),
+        session_info: {
+          user_identifier: req.user?.identifier,
+          session_type: req.user?.session_type
+        },
         query_parameters: {
           symbol,
           company,
@@ -881,21 +877,35 @@ app.get('/api/zerodha/holdings-ai', checkWhitelistMiddleware, async (req, res) =
         }
       });
       
-      console.log(`Individual stock AI analysis completed for: ${stockData.companyName}`);
+      console.log(`✅ Individual stock AI analysis completed for: ${stockData.companyName}`);
       return;
     }
     
-    // Handle bulk holdings analysis (original functionality)
+    // Handle bulk holdings analysis (original functionality) - requires Zerodha session
+    console.log(`🔍 Bulk holdings analysis - requires Zerodha access token`);
+    
+    // For bulk analysis, we need Zerodha session specifically
+    const zerodhaSessionData = await redisClient.get(`session:${sessionToken}`);
+    if (!zerodhaSessionData) {
+      return res.status(400).json({ 
+        error: 'Bulk holdings analysis requires Zerodha authentication',
+        message: 'Please log in with Zerodha to fetch your portfolio holdings',
+        individual_stock_analysis: 'Available with Google or Zerodha session'
+      });
+    }
+    
+    const { access_token: zerodhaAccessToken, user_id: zerodhaUserId } = JSON.parse(zerodhaSessionData);
+    
     // Fetch holdings from Zerodha
     const response = await axios.get('https://api.kite.trade/portfolio/holdings', {
       headers: {
         'X-Kite-Version': '3',
-        'Authorization': `token ${apiKey}:${accessToken}`
+        'Authorization': `token ${apiKey}:${zerodhaAccessToken}`
       }
     });
     
     const holdings = response.data.data;
-    console.log(`Holdings fetched for user: ${userId}, Count: ${holdings.length}, Mode: ${analysisMode}`);
+    console.log(`Holdings fetched for user: ${zerodhaUserId}, Count: ${holdings.length}, Mode: ${analysisMode}`);
     
     // Get AI recommendations if holdings exist
     let aiRecommendations = [];
