@@ -20,31 +20,37 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Google Gemini model - using gemini-pro (stable in v1beta API)
 const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
-// Function to list available models
-async function listAvailableModels() {
-  try {
-    console.log('🔍 Fetching list of available models...');
-    const models = await genAI.listModels();
-    console.log('📋 Available models:');
-    
-    const supportedModels = [];
-    for (const model of models) {
-      console.log(`- ${model.name} (${model.displayName})`);
-      console.log(`  Supported methods: ${model.supportedGenerationMethods?.join(', ') || 'unknown'}`);
+// Function to test available models by trying them
+async function findWorkingModel() {
+  // Known models to try (based on Google's documentation for v1beta API)
+  const modelsToTry = [
+    'gemini-pro',
+    'gemini-1.0-pro',
+    'gemini-1.0-pro-001',
+    'gemini-1.0-pro-latest',
+    'text-bison-001',
+    'text-bison@001'
+  ];
+  
+  console.log('� Testing available models by trying each one...');
+  
+  for (const modelName of modelsToTry) {
+    try {
+      console.log(`🧪 Testing model: ${modelName}`);
+      const testModel = genAI.getGenerativeModel({ model: modelName });
+      const testResult = await testModel.generateContent("Hello");
       
-      if (model.supportedGenerationMethods?.includes('generateContent')) {
-        supportedModels.push(model.name.replace('models/', ''));
-      }
+      console.log(`✅ SUCCESS: ${modelName} works!`);
+      return { modelName, success: true };
+      
+    } catch (error) {
+      console.log(`❌ FAILED: ${modelName} - ${error.message}`);
+      continue;
     }
-    
-    console.log('\n✅ Models that support generateContent:');
-    supportedModels.forEach(model => console.log(`- ${model}`));
-    
-    return supportedModels;
-  } catch (error) {
-    console.error('❌ Failed to list models:', error.message);
-    return [];
   }
+  
+  console.error('❌ No working models found from the test list');
+  return { modelName: null, success: false };
 }
 
 // Test function to verify Gemini API is working
@@ -52,25 +58,24 @@ async function testGeminiAPI() {
   try {
     console.log('🧪 Testing Gemini API connection...');
     
-    // First, list available models
-    const availableModels = await listAvailableModels();
+    // Find a working model by testing each one
+    const result = await findWorkingModel();
     
-    if (availableModels.length === 0) {
-      console.error('❌ No models available that support generateContent');
-      return false;
+    if (!result.success) {
+      console.error('❌ No working models found');
+      return { success: false, error: 'No working models found' };
     }
     
-    // Try the first available model
-    const workingModel = availableModels[0];
-    console.log(`🔄 Testing with first available model: ${workingModel}`);
+    // Test the working model with a more comprehensive prompt
+    console.log(`🔄 Running full test with working model: ${result.modelName}`);
     
-    const testModel = genAI.getGenerativeModel({ model: workingModel });
+    const testModel = genAI.getGenerativeModel({ model: result.modelName });
     const testResult = await testModel.generateContent("Say 'Hello, Gemini API is working!' in exactly those words.");
     const response = testResult.response.text();
     
-    console.log('✅ Gemini API test successful with model:', workingModel);
+    console.log('✅ Gemini API test successful with model:', result.modelName);
     console.log('Response:', response);
-    return { success: true, workingModel, availableModels };
+    return { success: true, workingModel: result.modelName };
     
   } catch (error) {
     console.error('❌ Gemini API test failed:', error.message);
@@ -2082,7 +2087,6 @@ app.get('/api/test/gemini', async (req, res) => {
         status: 'success',
         message: 'Gemini API is working correctly',
         workingModel: result.workingModel,
-        availableModels: result.availableModels,
         timestamp: new Date().toISOString()
       });
     } else {
