@@ -6,7 +6,7 @@ const qs = require('qs'); // npm package to stringify form data
 const crypto = require('crypto');
 const redis = require('redis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const yahooFinance = require('yahoo-finance2').default;
+const yahooFinance = require('yahoo-finance2');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
